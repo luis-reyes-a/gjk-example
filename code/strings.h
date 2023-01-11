@@ -6,6 +6,7 @@
 //#include <stddef.h> // size_t, ptrdiff_t
 //#include <stdlib.h> // for va_arg()
 #define STB_SPRINTF_IMPLEMENTATION
+#define STB_SPRINTF_STATIC
 #include "..\libs\stb_sprintf.h"
 
 #define litargs(lit)     lit, sizeof(lit)-1

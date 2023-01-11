@@ -1,6 +1,22 @@
-#define DEBUG_BUILD 1
-
 #include "platform.h"
+#define TARGET_FPS 60
+#define DEFAULT_WINDOW_WIDTH  1920
+#define DEFAULT_WINDOW_HEIGHT 1920
+#define DEFAULT_MULTISAMPLE_COUNT 4
+
+#define DEFAULT_FRAMEBUFFER_WIDTH  1920
+#define DEFAULT_FRAMEBUFFER_HEIGHT 1920
+//#define DEFAULT_FRAMEBUFFER_HEIGHT 1080
+
+static Platform *PLATFORM;
+inline Platform *get_platform() {
+    assert (PLATFORM);
+    return PLATFORM;
+}
+inline u64 get_frame_index() {
+    return get_platform()->frame_index;
+}
+
 
 //TODO how does this work with dll? Is having "static thread_local Memory_Arena *Temporary_Memory_Arena" the correct way?
 static thread_local Memory_Arena Temporary_Memory_Arena;
@@ -17,7 +33,7 @@ get_temp_memory() {
 #include "win32.h"
 
 //#include "ui.cpp"
-#include "debug.cpp"
+//#include "debug.cpp"
 
 
 //tell nvidia driver to please use it's gpu on a multigpu system...
@@ -36,40 +52,17 @@ init_thread_temporary_memory(u32 size = 1024*1024*32) {
 }
 
 
-
 internal Platform *
 init_platform() {
     PLATFORM = (Platform *)win32_allocate(sizeof(Platform));
-    if (!PLATFORM) return null;
-    
-    RENDER_CONTEXT = &PLATFORM->rcx;
-    
-    //platform call backs
-    PLATFORM->debug_printf_valist  = &win32_debug_printf_valist_internal;
-    PLATFORM->logprintf_internal = &win32_logprintf_internal;
-    PLATFORM->open_entire_file_null_terminate = &win32_open_entire_file_null_terminate;
-    PLATFORM->write_entire_file = &win32_write_entire_file;
-    PLATFORM->get_file_writer = &win32_get_platform_file_writer;
-    PLATFORM->read_file  = &win32_read_file;
-    PLATFORM->write_file = &win32_write_file;
-    PLATFORM->close_file = &win32_close_file;
-    PLATFORM->get_absolute_filepath = win32_get_absolute_filepath;
-    PLATFORM->visit_files = &win32_visit_files;
-    PLATFORM->does_file_exist = &win32_does_file_exist;
-    PLATFORM->get_files_in_directory_of_type = win32_get_files_in_directory_of_type;
-    PLATFORM->heap_create = &win32_heap_create;
-    PLATFORM->heap_allocate = &win32_heap_allocate;
-    PLATFORM->heap_free = &win32_heap_free;
-    PLATFORM->toggle_fullscreen = &win32_toggle_fullscreen;
-    PLATFORM->get_user_input = []() -> User_Input * {
-        return &W32.window.user_input;
-    };
-    
     PLATFORM->game_memory_store = make_memory_arena(PLATFORM->entire_game_memory, sizeof(PLATFORM->entire_game_memory));
     return PLATFORM;
 }
 
-
+//NOTE only things game.cpp is "exporting" for this module to link to
+void init_game(Platform *platform);
+void update_game(Platform *platform);
+void handle_input_game(User_Input *input);
 
 int CALLBACK 
 WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line_args, int show_code) {     
@@ -92,73 +85,26 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line_args, int sh
     #endif
     
     //TODO we need a better way of figuring this out
-    {
-        HDC dc = GetDC(NULL);
-        if (dc != NULL)
-        {
-            win32->monitor_refresh_rate = figure_out_monitor_refresh_rate(dc);
-            ReleaseDC(NULL, dc); //prob not necessary
-        }
-    }
+    
     
     //set schedular granularity so that Sleep() is more accurate
     nil sleep_is_granular = (timeBeginPeriod(1) == TIMERR_NOERROR);
     assert (sleep_is_granular); //TODO should we allow the game to run without this?
     
-    
-    HMODULE game_dll = LoadLibraryA("game.exe");
-    if (!game_dll)
-        fatalprintf("Could not find game.exe...");
-    
-    
-    let init_game       = (void (*)(Platform *, Memory_Arena *temp)) GetProcAddress(game_dll, "init_game");
-    let update_game     = (void (*)(Platform *))                     GetProcAddress(game_dll, "update_game");
-    let on_handle_input = (void (*)(User_Input *))                   GetProcAddress(game_dll, "handle_input");
-     
-    if (!init_game || !update_game || !on_handle_input)
-        fatalprintf("Could not load function pointers from game.exe");
-    
     setup_opengl(win32);
     init_opengl();
-    
     
     platform->still_running = true;
     platform->startup_seed = win32_make_random_seed();
     
-    u32 pak_size;
-    Asset_Pack_Header *pak = (Asset_Pack_Header *)open_entire_file_null_terminate(&platform->game_memory_store, "assets.pak"s, &pak_size);
-    if (!pak)	fatalprintf("Could not find assets.pak to load");
     
     
+    //platform->rcx.font = &pak->fonts[0];
+    //assert (platform->rcx.registered_cam_count == 0);
+    //register_camera("screen camera default");
     
-    for_index_inc(u32, i, pak->atlas_count)
-    {
-        Texture_Atlas *atlas = pak->atlas + i;
-        //calculate pointer locations from file base pointer
-        atlas->pixels = (void *)   ((u8 *)pak + (uintptr)atlas->pixels);
-        atlas->rects  = (Rect2i *) ((u8 *)pak + (uintptr)atlas->rects);
-        platform->rcx.atlas[i] = atlas;
-        debug_printf("Atlas %d (%dx%d) has %d sub images\n", i, atlas->width, atlas->height, atlas->rect_count);
-        
-        //s32 num_components = 4;
-        //if (atlas->type == TEXTURE_8BPP) 
-        //num_components = 1;
-        //stbi_write_png(names[i], atlas->width, atlas->height, num_components, atlas->pixels, atlas->width*num_components);
-        //breakpoint(1);
-        Opengl_Texture_Parameters params = default_texture_params(Opengl_Texture_Parameters::COLOR, atlas->width, atlas->height);
-        params.pixels = atlas->pixels;
-        if (atlas->type == TEXTURE_8BPP)
-            params.type = Opengl_Texture_Parameters::SINGLE_CHANNEL;
-        //else
-            //params.is_srgb = hasfl(OpenGL, OpenGL_SUPPORTS_SRGB_TEXTURE);
-        atlas->texture_id = allocate_texture(params);
-    }
-    platform->rcx.font = &pak->fonts[0];
-    assert (platform->rcx.registered_cam_count == 0);
-    register_camera("screen camera default");
-    
-    init_game(platform, &Temporary_Memory_Arena);
-	#if DEBUG_BUILD
+    init_game(platform);
+	#if 0 && DEBUG_BUILD
     DEBUG_init_internal();
     if (OpenGL.flags & OpenGL_SUPPORTS_SRGB_FRAMEBUFFER)
         debug_printf("Opengl suports srgb framebuffers\n");
@@ -213,36 +159,20 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line_args, int sh
                 platform->mouse_pos_normalized.y = divide((f32)new_mouse_y, (f32)window->client_height-1, 0.0f);
             }
         }
+        platform->mouse_pos_delta = platform->mouse_pos - last_mouse_pos;
         
-        Render_Context *rcx = render_context_begin_frame(window->client_width, window->client_height, platform->mouse_pos);
-        Retrieve_Input_Result input_result = retrieve_input(win32, platform, platform->mouse_pos, last_mouse_pos, on_handle_input);
-        if (input_result.quit_program) break; //anything special we want to do?..
+        Render_Context *rcx = &platform->rcx;
+        render_context_begin_frame(rcx, window->client_width, window->client_height, platform->mouse_pos);
+        handle_input_events(win32, platform, &handle_input_game);
+        if (!platform->still_running) break; 
+        //if (input_result.quit_program) break; //anything special we want to do?..
         
         
         //NOTE this is the client drawing area, not actually the window
-        
-		#if DEBUG_BUILD
-        platform->__debug_state.update_game_cycle_count = __rdtsc(); 
-        #endif
-        
         update_game(platform);
-        
-        #if DEBUG_BUILD
-        platform->__debug_state.update_game_cycle_count = __rdtsc() - platform->__debug_state.update_game_cycle_count;
-        #endif
-        
-        
-		#if DEBUG_BUILD
-        DEBUG_update_internal(platform->dt);
-		#endif
-        
-        //win32->forced_window_aspect_ratio = platform->forced_window_aspect_ratio;
-        
         
         HDC dc = GetDC(win32->window.handle);
         render_opengl(platform, &platform->rcx);
-        //opengl_perlin_test(platform, &platform->rcx);
-        
         
         
         //NOTE SwapBuffers only stalls this thread when it can't handle drawing more frames
@@ -255,16 +185,14 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line_args, int sh
         timestamps[1]  = get_timestamp();
         f32 elapsed = get_secs_elapsed(win32, timestamps[1], timestamps[0]);
         f32 target_dt = (1.0f / TARGET_FPS); 
-        if (elapsed < target_dt)
-        {
+        if (elapsed < target_dt) {
             DWORD msecs_left = (DWORD)((target_dt - elapsed) * 1000.0f);
             Sleep(msecs_left);
         }
         #if DEBUG_BUILD
-        else if (elapsed > target_dt)
-        {
-            platform->debug_num_frames_passed_fps += 1;
-        }
+        //else if (elapsed > target_dt) {
+            //platform->debug_num_frames_passed_fps += 1;
+        //}
         #endif
         timestamps[1] = get_timestamp();
         platform->dt = get_secs_elapsed(win32, timestamps[1], timestamps[0]);
@@ -272,7 +200,7 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line_args, int sh
         //debug_printf("Framerate is %f", platform->dt * TARGET_FPS * 60);
     }
     
-    debug_printf("~~~~~~~~~~EXITING @%llu~~~~~~~~~~\n", FRAME_INDEX); 
+    debug_printf("~~~~~~~~~~EXITING @%llu~~~~~~~~~~\n", get_frame_index()); 
     debug_printf("Temp memory allocated was %'u\n", Temporary_Memory_Arena.size);
     debug_printf("Temp memory high water mark is %'u (%f%%)\n", temp_memory_high_water_mark, 100.0f * ((f32)temp_memory_high_water_mark / (f32)Temporary_Memory_Arena.size));
 }

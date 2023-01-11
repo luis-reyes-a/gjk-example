@@ -23,7 +23,6 @@
 
 struct Window {
     HWND handle;
-    
     User_Input user_input;
 
     union {
@@ -42,7 +41,6 @@ struct Window {
 struct Win32 {
     Window window;
     u64 query_performance_frequency;
-    u32 monitor_refresh_rate;
     
     //when scaling the window, this aspect ratio will be retained. 
     //if set to zero, window is resized freely as normal
@@ -50,17 +48,6 @@ struct Win32 {
     //nil user_wants_to_quit_app;
     char exe_directory_buffer[MAX_PATH];
     String directory;
-    
-    
-    //HGLOBAL clipboard_buffer; //a handle, not actual pointer
-    //s32 clipboard_buffer_size;
-    
-    //NOTE this is a bit redundant but we store the state now and previously and 
-    //convert it into the nicer Xbox_Controller type... 
-    DWORD (*XInputGetState)(DWORD controller_index, XINPUT_STATE *controller_state);
-    Xbox_Controller xbox_controller;
-    XINPUT_STATE xbox_controller_state;
-    XINPUT_STATE xbox_controller_state_last_frame; //we don't need this really
     
     Date_Time startup_date_time;
     HANDLE log_file_handle;
@@ -659,7 +646,7 @@ internal LRESULT CALLBACK //windows calls us here whenever an event below occurs
 default_message_handler(HWND window_handle, UINT message, WPARAM wparam, LPARAM lparam) {
     //NOTE typedef UINT_PTR WPARAM, basically unsigned size_t;
     //NOTE typedef LONG_PTR LPARAM, int64 on x64, long on x32 ... for somereason;
-    Platform *platform = GET_PLATFORM();
+    Platform *platform = get_platform();
     //NOTE this is lame. Basically windows will call us here in the middle of CreateWindowEX so I can't initialize windows here as we get startup message (have to poll after)
     Window *window = &W32.window;
     if_assert (window->handle, window->handle == window_handle);
@@ -668,7 +655,6 @@ default_message_handler(HWND window_handle, UINT message, WPARAM wparam, LPARAM 
     
     LRESULT result = 0; //NOTE is this a default value this should be set to?..
     switch(message) {
-    
     case WM_CLOSE: {
         //NOTE in multi-window programs, we would wait until all windows are closed to terminated
         //but where single window so we just do this
@@ -677,86 +663,21 @@ default_message_handler(HWND window_handle, UINT message, WPARAM wparam, LPARAM 
     } break;
     
     case WM_KILLFOCUS: {
-        #if 0
-        queue->focus_lost_this_frame = true;
-        new_input_event(input, INPUT_EVENT_FOCUS_LOST);
-        #else
         //set_next_input_focus(input, INPUT_FOCUS_EXTERNAL_PROGRAM);
         input->on_window_lose_focus = true;
         input->modifiers_down.clear_all_bits();
-        #endif
     } break;
     
     case WM_SETFOCUS: {
-        //set_next_input_focus(input, INPUT_FOCUS_WINDOW);
     } break;
     
     //NOTE this runs whenever user is holding onto the frames of the window regardless if the size had been changed or not
     
     case WM_SIZING: {
-        #if 0
-        if (W32.forced_window_aspect_ratio > 0)
-        {
-            RECT *rect = (RECT *)lparam;
-            s32 xpad, ypad;
-            {
-                //TODO can these be cached or can some wierdness happnes 
-                //that resets this to have different window borders and edge stuff?
-                RECT wrect, crect;
-                GetWindowRect(window, &wrect);
-                GetClientRect(window, &crect);
-                xpad = (wrect.right - wrect.left) - crect.right;
-                ypad = (wrect.bottom - wrect.top) - crect.bottom;	 
-            }
-            
-            if (wparam == WMSZ_RIGHT || wparam == WMSZ_LEFT)
-            {
-                s32 width = rect->right - rect->left - xpad;
-                s32 new_height = (s32)(width / W32.forced_window_aspect_ratio);
-                s32 d_height = new_height - (rect->bottom - rect->top - ypad);
-                rect->bottom += d_height;
-            }
-            else if (wparam == WMSZ_BOTTOM || wparam == WMSZ_TOP)
-            {
-                s32 height = rect->bottom - rect->top - ypad;
-                s32 new_width = (s32)(height * W32.forced_window_aspect_ratio);
-                s32 d_width = new_width - (rect->right - rect->left - xpad);
-                rect->right += d_width;
-            }
-        }
-        #endif
         result = DefWindowProcA(window_handle, message, wparam, lparam); 
     } break;
     
-    #if 0
-    case WM_WINDOWPOSCHANGED: {
-        
-        
-        WINDOWPOS *winpos = (WINDOWPOS *)lparam; 
-        if (~winpos->flags & SWP_NOSIZE) {
-            breakpoint;    
-        }
-        result = DefWindowProcA(window_handle, message, wparam, lparam);
-    } break; 
-    #endif
-    
-    #if 0
-    case WM_SYSCOMMAND: {
-        if (wparam == SC_MAXIMIZE) {
-            //if (window->handle) debug_printf("SC_MAXIMIZE\n");
-        }
-        else if (wparam == SC_SIZE) {
-            //if (window->handle) debug_printf("SC_SIZE\n");
-        }
-        result = DefWindowProcA(window_handle, message, wparam, lparam);
-    } break;
-    
-    case WM_WINDOWPOSCHANGED: {
-        //if (window->handle) debug_printf("winpos change\n");
-        result = DefWindowProcA(window_handle, message, wparam, lparam);
-    } break;
-    #endif
-    
+    #if 0 //TODO
     case WM_SIZE: {
         //BOOL zoomed = IsZoomed(window_handle);
         window->client_width  = (lparam >>  0) & 0xffff;
@@ -811,7 +732,7 @@ default_message_handler(HWND window_handle, UINT message, WPARAM wparam, LPARAM 
         
         result = DefWindowProcA(window_handle, message, wparam, lparam); 
     } break;
-    
+    #endif
     case WM_EXITSIZEMOVE: {
         if (window->is_resizing) {
             window->is_resizing = false;
@@ -827,7 +748,7 @@ default_message_handler(HWND window_handle, UINT message, WPARAM wparam, LPARAM 
     
  
     default:
-    result = DefWindowProcA(window_handle, message, wparam, lparam);   
+    result = DefWindowProcA(window_handle, message, wparam, lparam); 
     }
     
     return result;
@@ -970,35 +891,7 @@ make_single_window_app(HINSTANCE instance, char *title) {
     win32->window = {};
     
     
-    
-    {
-        // NOTE we have to init this here because sometimes, Windows will call default_message_handler
-    	// and the queue will not be set in time.... very annoying. Why is default_message_handler event a thing
-        User_Input *input = &win32->window.user_input;
-        input->focus_type      = INPUT_FOCUS_WINDOW; //not necessary the current way we do things, but just to be robust for future changes
-        input->next_focus_type = INPUT_FOCUS_WINDOW; //just to set it correctly
-        //input->focus_to_release = INPUT_FOCUS_EXTERNAL_PROGRAM;
-        for (s32 i = 0; i < countof(input->event_lists); i += 1) {
-            Input_Event *sentinel = input->event_lists + i;
-            sentinel->prev_event = sentinel;
-            sentinel->next_event = sentinel;
-        }    
-        
-        //setup free list
-        Input_Event *sentinel = &input->free_events_list;
-        sentinel->prev_event = sentinel;
-        sentinel->next_event = sentinel;
-        
-        for_c_array_forward (data, input->events) {
-            Input_Event *event = &data->event;
-            event->prev_event = sentinel->prev_event;
-            event->next_event = sentinel;
-            
-            event->prev_event->next_event = event;
-            event->next_event->prev_event = event;
-        }
-    }
-    
+    init_user_input(&win32->window.user_input);
     
     
     win32->window.handle = NULL;
@@ -1114,23 +1007,7 @@ make_single_window_app(HINSTANCE instance, char *title) {
     #endif
     
     win32->startup_date_time = get_date_time();
-    
-    //HCURSOR cursor = LoadCursorA(instance, IDC_ARROW);
-    //SetCursor(cursor);
-    
-    
-    
-    //TODO do I have to call FreeLibraryA or will windows know to do this 
-    //when my program exits?
-    HMODULE dll = LoadLibraryA("xinput1_3.dll"); 
-    if (!dll) dll = LoadLibraryA("xinput1_4.dll");
-    if (dll)
-        win32->XInputGetState = (DWORD (*)(DWORD, XINPUT_STATE *))GetProcAddress(dll, "XInputGetState");
-    
-    if (!win32->XInputGetState)
-    {
-        logprintf("Could not load xinput.dll");
-    }
+   
     return win32;
 }
 
@@ -1142,7 +1019,6 @@ make_single_window_app(HINSTANCE instance, char *title) {
 #if !defined(PLATFORM_H)
 #error win32.h needs platform.h in order to retrieve the input...
 #endif"
-
 
 
 internal void
@@ -1198,14 +1074,8 @@ win32_make_random_seed() {
 }
 
 
-#if 1
-struct Retrieve_Input_Result {
-    bool quit_program;
-};
-
-internal Retrieve_Input_Result
-retrieve_input(Win32 *win32, Platform *platform, Vector2i mouse_pos, Vector2i last_mouse_pos,
-               void (*on_handle_event)(User_Input *)) {
+internal void
+handle_input_events(Win32 *win32, Platform *platform, void (*on_handle_event)(User_Input *)) {
     
     Memory_Arena *scratch = &Temporary_Memory_Arena;
     RESTORE_MEMORY_ARENA_ON_SCOPE_EXIT(scratch);
@@ -1219,25 +1089,24 @@ retrieve_input(Win32 *win32, Platform *platform, Vector2i mouse_pos, Vector2i la
     //but that probably wouldn't work like that. Maybe this should just be here in the stack instead...
     
     User_Input *input = &window->user_input;
-    reset_input_event_queue(input);
-    input->mouse_pos = platform->rcx.mouse_pos;
-    input->mouse_pos_normalized = platform->rcx.mouse_pos_t;
+    reset_user_input(input);
+    input->mouse_pos = platform->mouse_pos;
+    input->mouse_pos_normalized = platform->mouse_pos_normalized;
     
     
     {
         let *event = (Input_Event_Mouse_Pos *)new_input_event(input, INPUT_EVENT_MOUSE_POS);
         if (event) {
-            event->pos = mouse_pos;
-            event->last_pos = last_mouse_pos;
+            event->pos = platform->mouse_pos;
+            event->last_pos = platform->mouse_pos - platform->mouse_pos_delta;
         }
     }
     
-    if ((mouse_pos.x != last_mouse_pos.x) ||
-        (mouse_pos.y != last_mouse_pos.y)) { //only called if there is a change in pos
+    //only called if there is a change in pos
+    if (platform->mouse_pos_delta.x || platform->mouse_pos_delta.y) {
         let *event = (Input_Event_Mouse_Delta *)new_input_event(input, INPUT_EVENT_MOUSE_DELTA);
         if (event) {
-            event->dx = mouse_pos.x - last_mouse_pos.x;
-            event->dy = mouse_pos.y - last_mouse_pos.y;
+            event->delta = platform->mouse_pos_delta;
         }
     }
     
@@ -1512,313 +1381,13 @@ retrieve_input(Win32 *win32, Platform *platform, Vector2i mouse_pos, Vector2i la
     }
     
 	//print_input_event_queue(input);
-    Retrieve_Input_Result result = {};
     on_handle_event(input);
     if (input->sent_out_program_will_exit_event) {
-        result.quit_program = true;
+        platform->still_running = false;
     }
-    
-    #if 0 //this was a dumb idea, just handle FOCUS lost events directly
-    bool focus_lost_this_frame = input->focus_lost_this_frame; 
-    
-    //NOTE we have two options that we can do...
-    // we can either nullify key events on focus lost, meaning we find key down events and mark_handled() them
-    // or we can do this here of just generating release events the next frame
-    // I think option 1 is better for release build but option 2 is better for debugging when I press a key to make the game halt
-    // not sure though....
-    
-    if (focus_lost_this_frame) {
-        s32 keyid;
-        while (input->modifiers_down.find_least_significant_bit(&keyid)) {
-            Input_Event_Key *key = new_key_event(input, (Keyboard_Key_ID)keyid);
-            if (key) {
-                key->on_release = true;
-                key->on_release_focus_lost = true;
-                clear_modifier(input, keyid);    
-            }
-        }
-    }
-    #endif
-    
-    
-    
-    
-    return result;
 }
 
-#else
-internal void 
-retrieve_input(Win32 *win32, Platform *platform)
-{
-    //NOTE we got to do this because windows doesn't return the previous
-    //state for mouses, and we need that to get press events
-    static bool was_left_mouse_down   = false;
-    static bool was_middle_mouse_down = false;
-    static bool was_right_mouse_down  = false;
-    
-    Keyboard_Input *kbinput = &platform->kbinput;
-    Mouse_Input    *mouse   = &platform->mouse;
-    
-    mouse->scroll = 0;
-    mouse->scroll_handled = false;
-    
-    
-    
-    clear_keyboard_key(&mouse->left);
-    clear_keyboard_key(&mouse->right);
-    clear_keyboard_key(&mouse->middle);
-    
-    
-    defer { //TODO why do we have to do SetCapture and ReleaseCapture() again?...
-            if (mouse->on_left_press() || mouse->on_right_press() || mouse->on_middle_press())
-                SetCapture(win32->window); //TODO do we have to do this always?..
-            // NOTE not calling ReleaseCapture() seems to have the exact same effect
-            // but just in case this isn't true on other versions of Windows, we're keeping it...
-            else if (!mouse->is_left_down() && !mouse->is_right_down() && !mouse->is_middle_down()) //all up
-                ReleaseCapture();
-    };
-    
-    //@NOTE why does this fix 
-    //button->on_press   = s8(is_down && !was_down); 
-    //from not working below...
-    array_foreach(key, kbinput->keys)
-        clear_keyboard_key(key);
-    
-    kbinput->chars.count = 0;
-    
-    MSG message;
-    while(PeekMessage(&message, 0, 0, 0, PM_REMOVE)) {
-        switch(message.message) {
-        case WM_KEYDOWN: case WM_KEYUP:
-        {
-            //MOST likely we do not care but we could hash the keycode to 
-            //get to the Keyboard_Key we want
-            u32 keycode = (u32)message.wParam;
-            for_index_inc(s32, i, countof(kbinput->keys))
-            {
-                Keyboard_Key *key = kbinput->keys + i;
-                if (key->keycode == keycode)
-                {
-                    nil is_down  = (message.lParam & (1 << 31)) == 0;
-                    nil was_down = (message.lParam & (1 << 30)) != 0;
-                    //NOTE windows stops sending WM_KEYDOWN messages as soon as another
-                    //key is being pressed so we have remember that a key was down before...
-                    if (is_down) {
-                        key->down = true;
-                        if (!was_down)
-                            key->just_pressed_or_released = true;
-                    } else  {
-                        key->down = false;
-                        if (was_down)
-                            key->just_pressed_or_released = true;
-                    }
-                }
-            }
-            
-            //NOTE gotta do this regardless if message handled or not, otherwise we don't get WM_CHAR events
-            TranslateMessageA(&message);
-            DispatchMessageA(&message);
-        }break;
-        
-        
-        
-        case WM_LBUTTONDOWN: 
-        {
-            mouse->left.just_pressed_or_released = !was_left_mouse_down;
-            mouse->left.down    = true;
-            was_left_mouse_down = true;
-        } break;
-        
-        case WM_RBUTTONDOWN: 
-        {
-            mouse->right.just_pressed_or_released = !was_right_mouse_down;
-            mouse->right.down    = true;
-            was_right_mouse_down = true;
-        } break;
-        
-        case WM_MBUTTONDOWN:
-        {
-            mouse->middle.just_pressed_or_released = !was_middle_mouse_down;
-            mouse->middle.down    = true;
-            was_middle_mouse_down = true;
-        } break;
-        
-        case WM_LBUTTONUP: 
-        {
-            mouse->left.just_pressed_or_released = was_left_mouse_down;
-            mouse->left.down    = false;
-            was_left_mouse_down = false;
-        } break;
-        
-        case WM_RBUTTONUP: 
-        {
-            mouse->right.just_pressed_or_released = was_right_mouse_down;
-            mouse->right.down    = false;
-            was_right_mouse_down = false;
-        } break;
-        
-        case WM_MBUTTONUP: 
-        {
-            mouse->middle.just_pressed_or_released = was_middle_mouse_down;
-            mouse->middle.down    = false;
-            was_middle_mouse_down = false;
-        } break;
-        
-        case WM_MOUSEWHEEL:
-        {
-            //NOTE this is multiples of WHEEL_DELTA, which is 120, +up, -down
-            mouse->scroll = GET_WHEEL_DELTA_WPARAM(message.wParam) / 120.0f;
-        } break;
-        
-        
-        
-        #if 0 //not what you think it is
-        case WM_ACTIVATE:
-        {
-            PANIC;
-            if (message.wParam == WA_INACTIVE)
-            {
-                win32->window_is_active = false;;
-            }
-            else
-            {
-                win32->window_is_active = true;
-            }
-        } break;
-        #endif
-        
-        
-        //NOTE WM_CHAR is nice to use because it has the actual delay for characters I like
-        #if 0
-        case WM_CHAR:
-        {
-            
-            //TODO I can probably embed this in WM_KEYDOWN using ToUnicode or ToAcii conversin functions
-            u32 utf16_char = (u32)message.wParam;
-            if (is_ascii(utf16_char))
-            {
-                
-                if (utf16_char == '\r') utf16_char = '\n';
-                if (kbinput->chars.left()) 
-                    kbinput->chars.push((char)utf16_char); 
-                
-                //char *string = kbinput->chars.e;
-                //string[kbinput->chars.count] = 0;
-                //OutputDebugStringA(string);
-            }
-            
-        } break;
-        #endif
-        
-        
-        
-        
-        default:
-        {
-            TranslateMessageA(&message);
-            DispatchMessageA(&message);
-        }
-        }
-        
-    }
-    
-    if (win32->XInputGetState)
-    {
-        Xbox_Controller *controller = &W32.xbox_controller;
-        controller->is_connected = false;
-        win32->xbox_controller_state_last_frame = win32->xbox_controller_state;
-        if (win32->XInputGetState(0, &win32->xbox_controller_state) == ERROR_SUCCESS)
-        {
-            controller->is_connected = true;
-            
-            enum 
-            {
-                XBOX_DPAD_UP	    = 0x0001,
-                XBOX_DPAD_DOWN	  = 0x0002,
-                XBOX_DPAD_LEFT	  = 0x0004,
-                XBOX_DPAD_RIGHT	 = 0x0008,
-                XBOX_START	      = 0x0010,
-                XBOX_BACK	       = 0x0020,
-                XBOX_STICK_LEFT	 = 0x0040,
-                XBOX_STICK_RIGHT   = 0x0080,
-                XBOX_BUMPER_LEFT   = 0x0100,
-                XBOX_BUMPER_RIGHT  = 0x0200,
-                XBOX_A	          = 0x1000,
-                XBOX_B	          = 0x2000,
-                XBOX_X	          = 0x4000,
-                XBOX_Y	          = 0x8000,   
-            };
-            
-            struct update_xbox_controller_button
-            {
-                void operator() (Win32 *win32, Xbox_Controller_Button *button, u32 flags)
-                {
-                    button->on_press   = false;
-                    button->on_release = false;
-                    if (win32->xbox_controller_state.Gamepad.wButtons & flags)
-                    {
-                        button->down = true;
-                        if (!(win32->xbox_controller_state_last_frame.Gamepad.wButtons & flags))
-                        {
-                            button->on_press = true;
-                        }
-                    }
-                    else
-                    {
-                        button->down = false;
-                        if (win32->xbox_controller_state_last_frame.Gamepad.wButtons & flags)
-                        {
-                            button->on_release = true;
-                        }
-                    }
-                } 
-            } update_xbox_controller_button;
-            
-            update_xbox_controller_button(win32, &controller->a, XBOX_A);
-            update_xbox_controller_button(win32, &controller->b, XBOX_B);
-            update_xbox_controller_button(win32, &controller->x, XBOX_X);
-            update_xbox_controller_button(win32, &controller->y, XBOX_Y);
-            
-            update_xbox_controller_button(win32, &controller->pad_up,    XBOX_DPAD_UP);
-            update_xbox_controller_button(win32, &controller->pad_right, XBOX_DPAD_RIGHT);
-            update_xbox_controller_button(win32, &controller->pad_down,  XBOX_DPAD_DOWN);
-            update_xbox_controller_button(win32, &controller->pad_left,  XBOX_DPAD_LEFT);
-            
-            update_xbox_controller_button(win32, &controller->start, XBOX_START);
-            update_xbox_controller_button(win32, &controller->back,  XBOX_BACK);
-            
-            update_xbox_controller_button(win32, &controller->lbumper,   XBOX_BUMPER_LEFT);
-            update_xbox_controller_button(win32, &controller->rbumper,  XBOX_BUMPER_RIGHT);
-            
-            controller->ltrigger = win32->xbox_controller_state.Gamepad.bLeftTrigger   / 255.0f;
-            controller->rtrigger = win32->xbox_controller_state.Gamepad.bRightTrigger  / 255.0f;
-            
-            controller->lstick.x = win32->xbox_controller_state.Gamepad.sThumbLX / 32768.0f;
-            controller->lstick.y = win32->xbox_controller_state.Gamepad.sThumbLY / 32768.0f;
-            controller->rstick.x = win32->xbox_controller_state.Gamepad.sThumbRX / 32768.0f;
-            controller->rstick.y = win32->xbox_controller_state.Gamepad.sThumbRY / 32768.0f;
-            
-            f32 deadzone_l = 0.3f;
-            f32 deadzone_r = 0.2f; //a bit excessive 
-            
-            f32 length_l = norm(controller->lstick);
-            if (length_l > 1)
-            {
-                controller->lstick /= length_l; //normalize
-            }
-            else if (length_l < deadzone_l) controller->lstick = v2(0, 0);
-            
-            
-            f32 length_r = norm(controller->rstick);
-            if (length_r > 1)
-            {
-                controller->rstick /= length_r;
-            }
-            else if (length_r < deadzone_r) controller->rstick = v2(0, 0);
-        }
-    }
-}
-#endif
+
 
 internal char *
 win32_open_entire_file_null_terminate(Memory_Arena *arena, String filename, u32 *out_filesize = 0) {
@@ -2227,8 +1796,7 @@ get_secs_elapsed(Win32 *win32, u64 t2, u64 t1)
 #endif
 
 internal int
-get_regular_pixel_format_index(HDC dc)
-{
+get_regular_pixel_format_index(HDC dc) {
     int pindex;
     PIXELFORMATDESCRIPTOR pformat = {};
     pformat.nSize = sizeof(pformat);
@@ -2245,16 +1813,14 @@ get_regular_pixel_format_index(HDC dc)
 }
 
 internal void
-set_pixel_format(HDC dc, int pindex)
-{
+set_pixel_format(HDC dc, int pindex) {
     PIXELFORMATDESCRIPTOR pformat;
     DescribePixelFormat(dc, pindex, sizeof(pformat), &pformat); //@TODO check ok?
     SetPixelFormat(dc, pindex, &pformat);
 }
 
 internal u32
-figure_out_monitor_refresh_rate(HDC dc)
-{
+figure_out_monitor_refresh_rate(HDC dc) {
     int result = GetDeviceCaps(dc, VREFRESH);
     if (result == 0 || result == 1)
     {
@@ -2265,8 +1831,7 @@ figure_out_monitor_refresh_rate(HDC dc)
 }
 
 internal Opengl *
-setup_opengl(Win32 *win32)
-{
+setup_opengl(Win32 *win32) {
     //this creates an opengl compatible dc context and fills out the opengl struct
     //we attempt to make an srgb framebuffer
     //we require opengl 3.3 or later

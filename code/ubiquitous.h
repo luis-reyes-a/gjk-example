@@ -22,6 +22,8 @@ enum {
 #define null  nullptr
 #define EMPTY(...) 
 
+#define STRINGIFY2(x) #x
+#define STRINGIFY(x) STRINGIFY2(x)
 
 #define ENUM_STRING(x, ...) strlit(#x)
 #define ENUM_STRING_OFFSET(x, offset, ...) { (char *)#x + (offset), (s32)sizeof(#x)-1-(offset), (s32)sizeof(#x)-(offset) }
@@ -131,7 +133,7 @@ struct Push_Size_Args {
     bool zero_out_memory; // = false;
 };
 
-//NOTE people are required to define this function, it's basically a first class citizen.
+//NOTE people are required to define this function, it's basically a first class citizen for us
 internal Memory_Arena *get_temp_memory();
 
 
