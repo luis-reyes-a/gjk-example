@@ -1974,6 +1974,10 @@ setup_opengl(Win32 *win32) {
     X(glUniform4fv);
     X(glUniformMatrix4fv);
     X(glUniformMatrix3fv);
+    
+    X(glGetUniformiv);
+    X(glGetUniformfv);
+    
     X(glUseProgram);
     X(glGetShaderInfoLog);
     

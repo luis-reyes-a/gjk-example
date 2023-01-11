@@ -18,7 +18,6 @@
    but that color appears halfway bright
 
    So how does this work with opengl...
-  
 */
 
 #define GL_NUM_EXTENSIONS                 0x821D
@@ -136,6 +135,10 @@ X(void,     glUniform2i,  GLint location, GLint v0, GLint v1);
 X(void,     glUniform4fv, GLint location, GLsizei count, const GLfloat *value);
 X(void,     glUniformMatrix4fv, GLint location, GLsizei count, GLboolean transpose, const GLfloat *value);
 X(void,     glUniformMatrix3fv, GLint location, GLsizei count, GLboolean transpose, const GLfloat *value);
+
+X(void,     glGetUniformfv, GLuint program, GLint location, GLfloat *params);
+X(void,     glGetUniformiv, GLuint program, GLint location, GLint *params);
+
 X(void,     glUseProgram, GLuint program);
 
 X(void,     glGenFramebuffers,    GLsizei n, GLuint *framebuffers);
@@ -215,6 +218,7 @@ enum UBO_Binding_Point {
     UBO_CAMERA,
 };
 
+
 struct Vertex_Mesh {
     union {
         struct {
@@ -224,9 +228,7 @@ struct Vertex_Mesh {
             //GLuint ubo;        
         };
         GLuint buffers[2];
-    };
-    
-    
+    };    
 };
 
 struct Vertex2 {
@@ -242,6 +244,11 @@ struct Simple_Shader_2D {
     
     GLint vert_pos;
     GLint vert_uv;
+    
+    GLint u_viewport_dim;
+    GLint u_quad_pos;
+    GLint u_quad_dim;
+    GLint u_quad_col;
 };
 
 internal void
@@ -614,46 +621,47 @@ init_opengl() {
         
         char* vert_src = ""
         "#version 330\n"
-        "#line " STRINGIFY(__LINE__) "\n"
+        "#line " STRINGIFY((__LINE__ + 1)) "\n"
         R"___(
-         in vec2 vert_pos;
+         in vec2 vert_pos; //local pos offset to the vertex, in normalized space
          in vec2 vert_uv;
-         // uniform  viewport_dim;
+
+         uniform ivec2 u_viewport_dim;
+         uniform vec2  u_quad_pos;
+         uniform vec2  u_quad_dim;
+         uniform vec4  u_quad_col;
 
          out V2F {
 	         vec2 world_pos;
 	         vec2 uv;
 	         vec4 color;
-	
-	         //vec2 clip_rect_min;
-	         //vec2 clip_rect_max;
          } v2f;
          
          void main () {
-             vec2 pos = vert_pos;
+             v2f.world_pos = u_quad_pos + vert_pos*u_quad_dim; //screen pos of each vertex
+		     vec2 pos = v2f.world_pos / u_viewport_dim; //makes pos [0, 1] in viewport
+             pos = (2*pos) - vec2(1,1); //makes pos [-1, 1] in viewport
              gl_Position = vec4(pos, 0, 1);
-             v2f.world_pos = vert_pos;
+             
              v2f.uv = vert_uv;
-             v2f.color = vec4(1, 1, 0, 1);
+             v2f.color = u_quad_col;
+             v2f.color.a *= u_quad_dim.x*v2f.uv.x;
          }
          )___";
         
         char* frag_src = ""
         "#version 330\n"
-        "#line " STRINGIFY(__LINE__) "\n"
+        "#line " STRINGIFY((__LINE__ + 1)) "\n"
         R"___(
          in V2F {
 	         vec2 world_pos;
 	         vec2 uv;
 	         vec4 color;
-	
-	         //vec2 clip_rect_min;
-	         //vec2 clip_rect_max;
          } v2f;
          
          out vec4 frag_color;
          void main () {
-             frag_color = vec4(v2f.uv, v2f.color.r, 1);
+             frag_color = v2f.color;
          }
         )___";
         
@@ -692,7 +700,19 @@ init_opengl() {
             assert (shader->vert_pos != -1); //didn't find it, probably optimized out if never used in shader
             
             shader->vert_uv = glGetAttribLocation(shader->pid, "vert_uv");
-            assert (shader->vert_uv != -1); //didn't find it, probably optimized out if never used in shader    
+            assert (shader->vert_uv != -1); //didn't find it, probably optimized out if never used in shader 
+            
+            shader->u_viewport_dim = glGetUniformLocation(shader->pid, "u_viewport_dim");
+            assert(shader->u_viewport_dim != -1);
+            
+            shader->u_quad_pos = glGetUniformLocation(shader->pid, "u_quad_pos");
+            assert(shader->u_quad_pos != -1);
+            
+            shader->u_quad_dim = glGetUniformLocation(shader->pid, "u_quad_dim");
+            assert(shader->u_quad_dim  != -1);
+            
+            shader->u_quad_col = glGetUniformLocation(shader->pid, "u_quad_col");
+            assert(shader->u_quad_col != -1);
         }
     }
     
@@ -764,14 +784,69 @@ debug_output_framebuffer(Opengl_Framebuffer *framebuffer, char *filepath)
 
 
 
+static void
+draw_2d_quads(Vector2i viewport_dim) {
+    flush_errors();
+    
+    Simple_Shader_2D *shader = &OpenGL.simple_shader_2d;
+    assert (shader->compiled);
+    glUseProgram(shader->pid);
+    enable_vertex_attributes(shader);
+    
+    Vertex_Mesh *mesh = &OpenGL.square_mesh;
+    glBindBuffer(GL_ARRAY_BUFFER,         mesh->vbo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo); //for glDrawElementsInstanced
+    
+    glUniform2i(shader->u_viewport_dim, viewport_dim.x, viewport_dim.y);
+    
+    struct Quad {
+        Vector2 pos;
+        f32 w, h;
+        Vector4 color;
+    };
+    
+    Quad quads[] = {
+        {{400, 400}, 200, 200, {1, 0, 0, 1}},
+        {{600, 600}, 150, 150, {0, 1, 0, 1}},
+        {{600, 200}, 150, 250, {0, 1, 1, 1}},
+        {{400, 500},  50, 400, {1, 1, 0, 1}},
+    };
+    
+    for (s32 quad_index = 0; quad_index < countof(quads); quad_index += 1) {
+        Quad *quad = quads + quad_index;
+        glUniform2f(shader->u_quad_pos, quad->pos.x, quad->pos.y);
+        glUniform2f(shader->u_quad_dim, quad->w, quad->h);
+        glUniform4f(shader->u_quad_col, quad->color.x, quad->color.y, quad->color.z, quad->color.w);
+        
+        /*
+        s32 a[2];
+        glGetUniformiv(shader->pid, shader->u_viewport_dim, a);
+        
+        f32 b[2];
+        glGetUniformfv(shader->pid, shader->u_quad_pos, b);
+        f32 c[2];
+        glGetUniformfv(shader->pid, shader->u_quad_dim, c);
+        f32 d[4];
+        glGetUniformfv(shader->pid, shader->u_quad_col, d);
+        
+        breakpoint;
+        */
+        
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    }
+    
+    
+    disable_vertex_attributes(shader);
+    glUseProgram(0);
+    
+    check_for_errors();
+}
 
 
-
-internal void
+static void
 render_opengl(Platform *platform, Render_Context *rcx) {
-    s32 viewport_w = rcx->window_dim.x;
-    s32 viewport_h = rcx->window_dim.y;
-    if (viewport_w == 0 || viewport_h == 0) return; //nothing to render
+    Vector2i viewport_dim = v2i(rcx->window_dim.x, rcx->window_dim.y); 
+    if (viewport_dim.w == 0 || viewport_dim.h == 0) return; //nothing to render
     TIME_FUNCTION();
     
     
@@ -779,7 +854,7 @@ render_opengl(Platform *platform, Render_Context *rcx) {
     constexpr bool draw_directly_into_backbuffer = false;
     if (draw_directly_into_backbuffer) {
         glBindFramebuffer(GL_FRAMEBUFFER, 0);
-        glViewport(0, 0, viewport_w, viewport_h);    
+        glViewport(0, 0, viewport_dim.x, viewport_dim.h);    
     } else {
         bind_framebuffer_for_drawing(&OpenGL.framebuffer, rcx->window_dim.x, rcx->window_dim.y); //use framebuffer    
     }
@@ -790,24 +865,7 @@ render_opengl(Platform *platform, Render_Context *rcx) {
     glClearColor(SQUARED(0.5f), SQUARED(0.5f), SQUARED(0.5f), 1);
     glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
     
-    Simple_Shader_2D *shader = &OpenGL.simple_shader_2d;
-    assert (shader->compiled);
-    glUseProgram(shader->pid);
-    enable_vertex_attributes(shader);
-    
-    Vertex_Mesh *mesh = &OpenGL.square_mesh;
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo); //for glDrawElementsInstanced
-    
-    //set shader uniforms
-    //glUniform2i(uni->viewport_dim, rcx->window_dim.x, rcx->window_dim.y);
-    //glUniform1i(uni->bitmap1,  0);
-    //glUniform1i(uni->lightmap, 1); 
-    
-    glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
-    disable_vertex_attributes(shader);
-    glUseProgram(0);
-    
-    flush_errors();
+    draw_2d_quads(viewport_dim);
     
     if (!draw_directly_into_backbuffer) {
         //we now have to blit into backbuffer to view 
