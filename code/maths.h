@@ -247,8 +247,9 @@ dot2(Vector2 a, Vector2 b) {
 }
 
 internal f32 //signed area of bivector 
-wedge2(Vector2 a, Vector2 b)
-{	return a.x*b.y - b.x*a.y;	}
+wedge2(Vector2 a, Vector2 b) {
+	return a.x*b.y - b.x*a.y;	
+}
 
 internal f32
 normsq(Vector2 v)
@@ -529,8 +530,7 @@ dot3(Vector3 a, Vector3 b)
 { return a.x*b.x + a.y*b.y + a.z*b.z; }
 
 internal Vector3
-cross(Vector3 a, Vector3 b)
-{
+cross(Vector3 a, Vector3 b) {
     Vector3 result;
     result.x = a.y*b.z - a.z*b.y;
     result.y = a.z*b.x - a.x*b.z;
@@ -538,11 +538,11 @@ cross(Vector3 a, Vector3 b)
     return result;
 }
 
-union Vector4
-{
+union Vector4 {
     struct{ f32 x, y, z, w; };
     struct{ f32 r, g, b, a; };
     struct{ Vector2 xy, zw; };
+    struct{ Vector3 xyz; f32 w; };
 };
 
 internal Vector4
@@ -557,22 +557,22 @@ operator-(Vector4 a, Vector4 b) {	return v4(a.x - b.x, a.y - b.y, a.z - b.z, a.w
 static Vector4
 operator*(Vector4 a, f32 s) {	return v4(a.x*s, a.y*s, a.z*s, a.w*s);	}
 
+static Vector4
+operator*(f32 s, Vector4 a) {	return v4(a.x*s, a.y*s, a.z*s, a.w*s);	}
+
 internal Vector4
 lerp(Vector4 a, Vector4 b, f32 t)
 {   return a + (b - a)*t;   } 
 
 //NOTE column major
-union Matrix3x3
-{
+union Matrix3x3 {
     f32 e[9];
-    struct
-    {
+    struct {
         f32 e11, e21, e31;
         f32 e12, e22, e32;
         f32 e13, e23, e33;
     };
-    struct
-    {
+    struct {
         Vector3 x_basis;
         Vector3 y_basis;
         Vector3 z_basis;
@@ -580,11 +580,17 @@ union Matrix3x3
 };
 
 internal Matrix3x3
-identity3x3()
-{
+identity3x3() {
     Matrix3x3 result = {};
     result.e11 = result.e22 = result.e33 = 1;
     return result;
+}
+
+static void
+transpose(Matrix3x3 *m) {
+    SWAP(m->e21, m->e12);
+    SWAP(m->e31, m->e13);
+    SWAP(m->e32, m->e23);
 }
 
 internal Matrix3x3
@@ -636,8 +642,7 @@ multiply(Matrix3x3 *m, Vector3 v)
 }
 
 internal Matrix3x3
-multiply(Matrix3x3 *m, Matrix3x3 *columns)
-{
+multiply(Matrix3x3 *m, Matrix3x3 *columns) {
     Matrix3x3 result;
     result.x_basis = multiply(m, columns->x_basis);
     result.y_basis = multiply(m, columns->y_basis);
@@ -645,7 +650,55 @@ multiply(Matrix3x3 *m, Matrix3x3 *columns)
     return result;
 }
 
+union Matrix4x4 { //column major matrix
+    f32 e[16];
+    struct {
+        f32 e11, e21, e31, e41;
+        f32 e12, e22, e32, e42;
+        f32 e13, e23, e33, e43;
+        f32 e14, e24, e34, e44;
+    };
+    struct {
+        Vector4 x_basis;
+        Vector4 y_basis;
+        Vector4 z_basis;
+        Vector4 w_basis;
+    };
+};
 
+static Matrix4x4 identity4x4() {
+    Matrix4x4 m = {};
+    m.e11 = m.e22 = m.e33 = m.e44 = 1;
+    return m;
+}
+
+static void transpose(Matrix4x4 *m) {
+    SWAP(m->e12, m->e21);
+    SWAP(m->e13, m->e31);
+    SWAP(m->e14, m->e41);
+    SWAP(m->e23, m->e32);
+    SWAP(m->e24, m->e42);
+    SWAP(m->e34, m->e43);
+}
+
+inline f32 dot4(Vector4 a, Vector4 b) {
+    return a.x*b.x + a.y*b.y + a.z*b.z + a.w*b.w;
+}
+
+
+static Vector4 multiply(Matrix4x4 *m, Vector4 v) {
+    Vector4 result = v.x*m->x_basis + v.y*m->y_basis + v.z*m->z_basis + v.w*m->w_basis;
+    return result;
+}
+
+static Matrix4x4 multiply(Matrix4x4 *m, Matrix4x4 *columns) {
+    Matrix4x4 result;
+    result.x_basis = multiply(m, columns->x_basis);
+    result.y_basis = multiply(m, columns->y_basis);
+    result.z_basis = multiply(m, columns->z_basis);
+    result.w_basis = multiply(m, columns->w_basis);
+    return result;
+}
 
 //// rects
 struct Rect2i

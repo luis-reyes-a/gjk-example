@@ -228,11 +228,18 @@ struct Vertex_Mesh {
             //GLuint ubo;        
         };
         GLuint buffers[2];
-    };    
+    }; 
+    s32 vertex_count;
+    s32 index_count;
 };
 
 struct Vertex2 {
     Vector2 pos;
+    Vector2 uv;
+};
+
+struct Vertex3 {
+    Vector3 pos;
     Vector2 uv;
 };
 
@@ -249,28 +256,267 @@ struct Simple_Shader_2D {
     GLint u_quad_pos;
     GLint u_quad_dim;
     GLint u_quad_col;
+    
+    void enable_vertex_attributes() {
+        flush_errors();
+        
+        glEnableVertexAttribArray(vert_pos);
+        glVertexAttribPointer(vert_pos, 2, GL_FLOAT, GL_FALSE, 
+                              sizeof(Vertex2), (void *)offsetof(Vertex2, pos));
+        glEnableVertexAttribArray(vert_uv);
+        glVertexAttribPointer(vert_uv, 2, GL_FLOAT, GL_FALSE, 
+                              sizeof(Vertex2), (void *)offsetof(Vertex2, uv));
+        check_for_errors();
+    }
+    
+    void disable_vertex_attributes() {
+        flush_errors();
+        glDisableVertexAttribArray(vert_pos);
+        glDisableVertexAttribArray(vert_uv);
+        check_for_errors();
+    }
+    
+    void compile_shader() {
+        flush_errors();
+        defer { check_for_errors(); };
+        
+        vert_id = glCreateShader(GL_VERTEX_SHADER);
+        frag_id = glCreateShader(GL_FRAGMENT_SHADER);
+        pid = glCreateProgram();
+        if (!vert_id || !frag_id || !pid) {
+            assert (0); //ran out of vram somehow?...
+            vert_id = frag_id = pid = 0;
+        }
+        
+        char* vert_src = ""
+        "#version 330\n"
+        "#line " STRINGIFY((__LINE__ + 1)) "\n"
+        R"___(
+         in vec2 vert_pos; //local pos offset to the vertex, in normalized space
+         in vec2 vert_uv;
+    
+         uniform ivec2 u_viewport_dim;
+         uniform vec2  u_quad_pos;
+         uniform vec2  u_quad_dim;
+         uniform vec4  u_quad_col;
+    
+         out V2F {
+             vec2 world_pos;
+             vec2 uv;
+             vec4 color;
+         } v2f;
+         
+         void main () {
+             v2f.world_pos = u_quad_pos + vert_pos*u_quad_dim; //screen pos of each vertex
+             vec2 pos = v2f.world_pos / u_viewport_dim; //makes pos [0, 1] in viewport
+             pos = (2*pos) - vec2(1,1); //makes pos [-1, 1] in viewport
+             gl_Position = vec4(pos, 0, 1);
+             
+             v2f.uv = vert_uv;
+             v2f.color = u_quad_col;
+             v2f.color.a *= u_quad_dim.x*v2f.uv.x;
+         }
+         )___";
+        
+        char* frag_src = ""
+        "#version 330\n"
+        "#line " STRINGIFY((__LINE__ + 1)) "\n"
+        R"___(
+         in V2F {
+             vec2 world_pos;
+             vec2 uv;
+             vec4 color;
+         } v2f;
+         
+         out vec4 frag_color;
+         void main () {
+             frag_color = v2f.color;
+         }
+        )___";
+        
+        glShaderSource(vert_id, 1, &vert_src, 0);
+        glCompileShader(vert_id);
+        
+        glShaderSource(frag_id, 1, &frag_src, 0);
+        glCompileShader(frag_id);
+        
+        glAttachShader(pid, vert_id);
+        glAttachShader(pid, frag_id);
+        glLinkProgram(pid);
+        glValidateProgram(pid);
+        
+        GLint linked_ok = false, compiled_ok = false;
+        glGetProgramiv(pid, GL_LINK_STATUS,     &linked_ok);
+        glGetProgramiv(pid, GL_VALIDATE_STATUS, &compiled_ok);
+        compiled = linked_ok && compiled_ok; 
+        
+        if (!compiled) {
+            char vertex_log  [256];
+            char fragment_log[256];
+            char program_log [256];
+            glGetShaderInfoLog(vert_id, sizeof(vertex_log),   NULL, vertex_log);
+            glGetShaderInfoLog(frag_id, sizeof(fragment_log), NULL, fragment_log);
+            glGetProgramInfoLog(pid,    sizeof(program_log),  NULL, program_log);
+            breakpoint;
+            glDeleteShader(vert_id);
+            glDeleteShader(frag_id);
+            glDeleteProgram(pid);
+            vert_id = frag_id = pid = 0;
+        } else {
+            vert_pos = glGetAttribLocation(pid, "vert_pos");
+            assert (vert_pos != -1); //didn't find it, probably optimized out if never used in shader
+            
+            vert_uv = glGetAttribLocation(pid, "vert_uv");
+            assert (vert_uv != -1); //didn't find it, probably optimized out if never used in shader 
+            
+            u_viewport_dim = glGetUniformLocation(pid, "u_viewport_dim");
+            assert(u_viewport_dim != -1);
+            
+            u_quad_pos = glGetUniformLocation(pid, "u_quad_pos");
+            assert(u_quad_pos != -1);
+            
+            u_quad_dim = glGetUniformLocation(pid, "u_quad_dim");
+            assert(u_quad_dim  != -1);
+            
+            u_quad_col = glGetUniformLocation(pid, "u_quad_col");
+            assert(u_quad_col != -1);
+        }
+    }
 };
 
-internal void
-enable_vertex_attributes(Simple_Shader_2D *shader) {
-    flush_errors();
+struct Simple_Shader_3D {
+    GLuint pid;
+	GLuint vert_id;
+	GLuint frag_id;
+    bool compiled;
     
-    glEnableVertexAttribArray(shader->vert_pos);
-    glVertexAttribPointer(shader->vert_pos, 2, GL_FLOAT, GL_FALSE, 
-                          sizeof(Vertex2), (void *)offsetof(Vertex2, pos));
-    glEnableVertexAttribArray(shader->vert_uv);
-    glVertexAttribPointer(shader->vert_uv, 2, GL_FLOAT, GL_FALSE, 
-                          sizeof(Vertex2), (void *)offsetof(Vertex2, uv));
-    check_for_errors();
-}
+    GLint vert_pos;
+    GLint vert_uv;
+    
+    GLint u_xform;
+    //GLint u_cam_pos;
+    
+    static constexpr char* vert_src = ""
+    "#version 330\n"
+    "#line " STRINGIFY((__LINE__ + 1)) "\n"
+    R"___(
+     in vec3 vert_pos; //local pos offset to the vertex, in normalized space
+     in vec2 vert_uv;
+     
+     //uniform vec2 u_cam_pos;
+     uniform mat4x4 u_xform;
 
-internal void
-disable_vertex_attributes(Simple_Shader_2D *shader) {
-    flush_errors();
-    glDisableVertexAttribArray(shader->vert_pos);
-    glDisableVertexAttribArray(shader->vert_uv);
-    check_for_errors();
-}
+     out V2F {
+         vec2 uv;
+         vec4 color;
+     } v2f;
+     
+     void main () { 
+         gl_Position = u_xform*vec4(vert_pos, 1);
+
+         vec4 colors[] = vec4[7](vec4(1, 0, 0, 1), vec4(0, 1, 0, 1), vec4(0, 0, 1, 1), vec4(1, 1, 0, 1), 
+                                 vec4(0, 1, 1, 1), vec4(1, 0, 1, 1), vec4(1, 1, 1, 1));
+         v2f.color = colors[gl_VertexID % colors.length];
+         v2f.uv = vert_uv;
+     }
+     )___";
+    
+    static constexpr char* frag_src = ""
+    "#version 330\n"
+    "#line " STRINGIFY((__LINE__ + 1)) "\n"
+    R"___(
+     in V2F {
+         vec2 uv;
+         vec4 color;
+     } v2f;
+     
+     out vec4 frag_color;
+     void main () {
+         frag_color = v2f.color;
+         frag_color.a += v2f.uv.x+v2f.uv.y;
+     }
+    )___";
+    
+    bool compile_shader() {
+        flush_errors();
+        defer { check_for_errors(); };
+        
+        vert_id = glCreateShader(GL_VERTEX_SHADER);
+        frag_id = glCreateShader(GL_FRAGMENT_SHADER);
+        pid = glCreateProgram();
+        if (!vert_id || !frag_id || !pid) {
+            assert (0); //ran out of vram somehow?...
+            vert_id = frag_id = pid = 0;
+        }
+        
+        
+        GLchar *vs[] = {vert_src};
+        glShaderSource(vert_id, countof(vs), &vs[0], 0);
+        glCompileShader(vert_id);
+        
+        GLchar *fs[] = {frag_src};
+        glShaderSource(frag_id, countof(fs), &fs[0], 0);
+        glCompileShader(frag_id);
+        
+        glAttachShader(pid, vert_id);
+        glAttachShader(pid, frag_id);
+        glLinkProgram(pid);
+        glValidateProgram(pid);
+        
+        GLint linked_ok = false, compiled_ok = false;
+        glGetProgramiv(pid, GL_LINK_STATUS,     &linked_ok);
+        glGetProgramiv(pid, GL_VALIDATE_STATUS, &compiled_ok);
+        compiled = linked_ok && compiled_ok; 
+        
+        if (!compiled) {
+            char vertex_log  [256];
+            char fragment_log[256];
+            char program_log [256];
+            glGetShaderInfoLog(vert_id, sizeof(vertex_log),   NULL, vertex_log);
+            glGetShaderInfoLog(frag_id, sizeof(fragment_log), NULL, fragment_log);
+            glGetProgramInfoLog(pid,    sizeof(program_log),  NULL, program_log);
+            breakpoint;
+            glDeleteShader(vert_id);
+            glDeleteShader(frag_id);
+            glDeleteProgram(pid);
+            vert_id = frag_id = pid = 0;
+            return false;
+        } else {
+            vert_pos = glGetAttribLocation(pid, "vert_pos");
+            assert (vert_pos != -1); //didn't find it, probably optimized out if never used in shader
+            
+            vert_uv = glGetAttribLocation(pid, "vert_uv");
+            assert (vert_uv != -1); //didn't find it, probably optimized out if never used in shader 
+            
+            u_xform = glGetUniformLocation(pid, "u_xform");
+            assert(u_xform != -1);
+            
+            //u_cam_pos = glGetUniformLocation(pid, "u_cam_pos");
+            //assert(u_cam_pos != -1);
+            return true;
+        }
+    }
+    
+    void enable_vertex_attributes() {
+        flush_errors();
+        
+        glEnableVertexAttribArray(vert_pos);
+        glVertexAttribPointer(vert_pos, 3, GL_FLOAT, GL_FALSE, 
+                              sizeof(Vertex3), (void *)offsetof(Vertex3, pos));
+        glEnableVertexAttribArray(vert_uv);
+        glVertexAttribPointer(vert_uv, 2, GL_FLOAT, GL_FALSE, 
+                              sizeof(Vertex3), (void *)offsetof(Vertex3, uv));
+        check_for_errors();
+    }
+    
+    void disable_vertex_attributes() {
+        flush_errors();
+        glDisableVertexAttribArray(vert_pos);
+        glDisableVertexAttribArray(vert_uv);
+        check_for_errors();
+    }
+};
+
 
 struct Opengl {
     char *version;
@@ -280,7 +526,9 @@ struct Opengl {
     u32 flags;
     
     Simple_Shader_2D simple_shader_2d;
+    Simple_Shader_3D simple_shader_3d;
     Vertex_Mesh square_mesh;
+    Vertex_Mesh cube_mesh;
     
     //GLuint big_circle_texture; //used by lightmap shader
     //GLuint white_texture;
@@ -592,6 +840,9 @@ init_opengl() {
             0, 2, 1,
             1, 2, 3,
         };
+        
+        mesh->vertex_count = countof(vertices);
+        mesh->index_count  = countof(indices);
         glBindBuffer(GL_ARRAY_BUFFER, mesh->vbo);
         glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW); 
         glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo);
@@ -607,114 +858,63 @@ init_opengl() {
     }
     
     {
-        Simple_Shader_2D *shader = &OpenGL.simple_shader_2d;
-        flush_errors();
-        defer { check_for_errors(); };
+        Vertex_Mesh *mesh = &OpenGL.cube_mesh;
+        glGenBuffers(countof(mesh->buffers), &mesh->buffers[0]);
         
-        shader->vert_id = glCreateShader(GL_VERTEX_SHADER);
-        shader->frag_id = glCreateShader(GL_FRAGMENT_SHADER);
-        shader->pid = glCreateProgram();
-        if (!shader->vert_id || !shader->frag_id || !shader->pid) {
-            assert (0); //ran out of vram somehow?...
-            shader->vert_id = shader->frag_id = shader->pid = 0;
-        }
+        //FRONT: 13   BACK: 57
+        //       02         46
         
-        char* vert_src = ""
-        "#version 330\n"
-        "#line " STRINGIFY((__LINE__ + 1)) "\n"
-        R"___(
-         in vec2 vert_pos; //local pos offset to the vertex, in normalized space
-         in vec2 vert_uv;
-
-         uniform ivec2 u_viewport_dim;
-         uniform vec2  u_quad_pos;
-         uniform vec2  u_quad_dim;
-         uniform vec4  u_quad_col;
-
-         out V2F {
-	         vec2 world_pos;
-	         vec2 uv;
-	         vec4 color;
-         } v2f;
-         
-         void main () {
-             v2f.world_pos = u_quad_pos + vert_pos*u_quad_dim; //screen pos of each vertex
-		     vec2 pos = v2f.world_pos / u_viewport_dim; //makes pos [0, 1] in viewport
-             pos = (2*pos) - vec2(1,1); //makes pos [-1, 1] in viewport
-             gl_Position = vec4(pos, 0, 1);
-             
-             v2f.uv = vert_uv;
-             v2f.color = u_quad_col;
-             v2f.color.a *= u_quad_dim.x*v2f.uv.x;
-         }
-         )___";
-        
-        char* frag_src = ""
-        "#version 330\n"
-        "#line " STRINGIFY((__LINE__ + 1)) "\n"
-        R"___(
-         in V2F {
-	         vec2 world_pos;
-	         vec2 uv;
-	         vec4 color;
-         } v2f;
-         
-         out vec4 frag_color;
-         void main () {
-             frag_color = v2f.color;
-         }
-        )___";
-        
-        
-        
-        glShaderSource(shader->vert_id, 1, &vert_src, 0);
-        glCompileShader(shader->vert_id);
-        
-        glShaderSource(shader->frag_id, 1, &frag_src, 0);
-        glCompileShader(shader->frag_id);
-        
-        glAttachShader(shader->pid, shader->vert_id);
-        glAttachShader(shader->pid, shader->frag_id);
-        glLinkProgram(shader->pid);
-        glValidateProgram(shader->pid);
-        
-        GLint linked_ok = false, compiled_ok = false;
-        glGetProgramiv(shader->pid, GL_LINK_STATUS,     &linked_ok);
-        glGetProgramiv(shader->pid, GL_VALIDATE_STATUS, &compiled_ok);
-        shader->compiled = linked_ok && compiled_ok; 
-        
-        if (!shader->compiled) {
-            char vertex_log  [256];
-            char fragment_log[256];
-            char program_log [256];
-            glGetShaderInfoLog(shader->vert_id, sizeof(vertex_log),   NULL, vertex_log);
-            glGetShaderInfoLog(shader->frag_id, sizeof(fragment_log), NULL, fragment_log);
-            glGetProgramInfoLog(shader->pid,    sizeof(program_log),  NULL, program_log);
-            breakpoint;
-            glDeleteShader(shader->vert_id);
-            glDeleteShader(shader->frag_id);
-            glDeleteProgram(shader->pid);
-            shader->vert_id = shader->frag_id = shader->pid = 0;
-        } else {
-            shader->vert_pos = glGetAttribLocation(shader->pid, "vert_pos");
-            assert (shader->vert_pos != -1); //didn't find it, probably optimized out if never used in shader
+        Vertex3 vertices[] = {
+            {{-0.5f, -0.5f, +0.5f}, {0, 0}}, //0 front, bot left
+            {{-0.5f, +0.5f, +0.5f}, {0, 1}}, //1 front, top left
+            {{+0.5f, -0.5f, +0.5f}, {1, 0}}, //2 front, bot right
+            {{+0.5f, +0.5f, +0.5f}, {1, 1}}, //3 front, top right
             
-            shader->vert_uv = glGetAttribLocation(shader->pid, "vert_uv");
-            assert (shader->vert_uv != -1); //didn't find it, probably optimized out if never used in shader 
+            {{-0.5f, -0.5f, -0.5f}, {0, 0}}, //4 back, bot left
+            {{-0.5f, +0.5f, -0.5f}, {0, 1}}, //5 back, top left
+            {{+0.5f, -0.5f, -0.5f}, {1, 0}}, //6 back, bot right
+            {{+0.5f, +0.5f, -0.5f}, {1, 1}}, //7 back, top right
+        };
+        u32 indices[] = { //can we use a smaller size here?
+            0, 2, 1, //front
+            1, 2, 3,
             
-            shader->u_viewport_dim = glGetUniformLocation(shader->pid, "u_viewport_dim");
-            assert(shader->u_viewport_dim != -1);
+            1, 3, 5, //top
+            5, 3, 7,
             
-            shader->u_quad_pos = glGetUniformLocation(shader->pid, "u_quad_pos");
-            assert(shader->u_quad_pos != -1);
+            6, 4, 7, //back
+            7, 4, 5,
             
-            shader->u_quad_dim = glGetUniformLocation(shader->pid, "u_quad_dim");
-            assert(shader->u_quad_dim  != -1);
+            4, 6, 0, //bottom
+            0, 6, 2,
             
-            shader->u_quad_col = glGetUniformLocation(shader->pid, "u_quad_col");
-            assert(shader->u_quad_col != -1);
-        }
+            2, 6, 3, //right
+            3, 6, 7,
+            
+            4, 0, 5, //left
+            5, 0, 1,
+            
+        };
+        
+        mesh->vertex_count = countof(vertices);
+        mesh->index_count  = countof(indices);
+        glBindBuffer(GL_ARRAY_BUFFER, mesh->vbo);
+        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW); 
+        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo);
+        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW); 
+        
+        //glGenBuffers(1, &OpenGL.ibo);
+        //glBindBuffer(GL_ARRAY_BUFFER, OpenGL.ibo);
+        //glBufferData(GL_ARRAY_BUFFER, MAX_INSTANCE_BUFFER_SIZE, 0, GL_DYNAMIC_DRAW);
+        
+        //glGenBuffers(1, &OpenGL.ubo);
+        //glBindBuffer(GL_UNIFORM_BUFFER, OpenGL.ubo);
+        //glBufferData(GL_UNIFORM_BUFFER, sizeof(UBO_Camera), 0, GL_DYNAMIC_DRAW);
     }
+    
+    //TODO log error output
+    OpenGL.simple_shader_2d.compile_shader();
+    OpenGL.simple_shader_3d.compile_shader();
     
     
     #if 0
@@ -791,7 +991,7 @@ draw_2d_quads(Vector2i viewport_dim) {
     Simple_Shader_2D *shader = &OpenGL.simple_shader_2d;
     assert (shader->compiled);
     glUseProgram(shader->pid);
-    enable_vertex_attributes(shader);
+    shader->enable_vertex_attributes();
     
     Vertex_Mesh *mesh = &OpenGL.square_mesh;
     glBindBuffer(GL_ARRAY_BUFFER,         mesh->vbo);
@@ -817,26 +1017,91 @@ draw_2d_quads(Vector2i viewport_dim) {
         glUniform2f(shader->u_quad_pos, quad->pos.x, quad->pos.y);
         glUniform2f(shader->u_quad_dim, quad->w, quad->h);
         glUniform4f(shader->u_quad_col, quad->color.x, quad->color.y, quad->color.z, quad->color.w);
-        
-        /*
-        s32 a[2];
-        glGetUniformiv(shader->pid, shader->u_viewport_dim, a);
-        
-        f32 b[2];
-        glGetUniformfv(shader->pid, shader->u_quad_pos, b);
-        f32 c[2];
-        glGetUniformfv(shader->pid, shader->u_quad_dim, c);
-        f32 d[4];
-        glGetUniformfv(shader->pid, shader->u_quad_col, d);
-        
-        breakpoint;
-        */
-        
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
     
     
-    disable_vertex_attributes(shader);
+    shader->disable_vertex_attributes();
+    glUseProgram(0);
+    
+    check_for_errors();
+}
+
+
+static void
+draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
+    flush_errors();
+    
+    glCullFace(GL_BACK);
+    
+    Simple_Shader_3D *shader = &OpenGL.simple_shader_3d;
+    assert (shader->compiled);
+    glUseProgram(shader->pid);
+    shader->enable_vertex_attributes();
+    
+    Vertex_Mesh *mesh = &OpenGL.cube_mesh;
+    glBindBuffer(GL_ARRAY_BUFFER,         mesh->vbo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo); //for glDrawElementsInstanced
+    
+    
+    //glUniform2i(shader->u_viewport_dim, viewport_dim.x, viewport_dim.y);
+    Vector3 cam_basis_x = {1, 0, 0};
+    Vector3 cam_basis_y = {0, 1, 0};
+    Vector3 cam_basis_z = cross(cam_basis_x, cam_basis_y);
+    Vector3 cam_pos = rcx->cam_pos;
+    //Vector3 cam_basis_z = normalized(-cam_pos);
+    //Vector3 cam_basis_y = {}
+    //Vector3 at = {};
+    //Vector3 up = {}
+    
+    
+    
+    
+    Matrix4x4 lookat = {};
+    lookat.x_basis.xyz = cam_basis_x; 
+    lookat.y_basis.xyz = cam_basis_y; 
+    lookat.z_basis.xyz = cam_basis_z; 
+    lookat.e44 = 1;
+    transpose(&lookat);
+    lookat.e14 = -dot3(cam_basis_x, cam_pos);
+    lookat.e24 = -dot3(cam_basis_y, cam_pos);
+    lookat.e34 = -dot3(cam_basis_z, cam_pos);
+    
+    #if 1
+    f32 np = 0.1f;  //near plane
+    f32 fp = 10.0f; //far plane
+    
+    f32 aspect_w_over_h = (f32)viewport_dim.x / (f32)viewport_dim.y;
+    
+    clamp(&rcx->xfov, 60, 120);
+    assert (rcx->xfov >= 60);
+    assert (rcx->xfov <= 120);
+    f32 np_width = 2*np*tan(rcx->xfov/2);
+    f32 np_height = np_width / aspect_w_over_h;
+    
+    
+    Matrix4x4 proj = {}; //from view space to
+    proj.e11 = (2*np) / np_width;
+    proj.e22 = (2*np) / np_height;
+    proj.e33 = (-np - fp) / (np - fp);
+    proj.e34 = (2*fp*np)  / (np - fp);
+    proj.e43 = 1;
+    #endif
+    
+    Matrix4x4 m = multiply(&proj, &lookat);
+    //Matrix4x4 m= lookat;
+    
+    //f32 x_fov = 90;
+    //Matrix3x3 rot = identity3x3();
+    //static f32 theta = 0;
+    //theta += 0.01f;
+    //rot.x_basis = {cos(theta), 0, sin(theta)};
+    //rot.z_basis = {sin(theta), 0, cos(theta)};
+    
+    glUniformMatrix4fv(shader->u_xform, 1, GL_FALSE, m.e);
+    //glUniform3f(shader->u_cam_pos, cam_pos.x, cam_pos.y, cam_pos.z);
+    glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
+    shader->disable_vertex_attributes();
     glUseProgram(0);
     
     check_for_errors();
@@ -865,7 +1130,8 @@ render_opengl(Platform *platform, Render_Context *rcx) {
     glClearColor(SQUARED(0.5f), SQUARED(0.5f), SQUARED(0.5f), 1);
     glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
     
-    draw_2d_quads(viewport_dim);
+    //draw_2d_quads(viewport_dim);
+    draw_3d_cubes(rcx, viewport_dim);
     
     if (!draw_directly_into_backbuffer) {
         //we now have to blit into backbuffer to view 

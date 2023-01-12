@@ -17,6 +17,8 @@ struct Camera2D {
 struct Render_Context {
     Vector2i window_dim; //does not include border and title stuff. Just dimensions of window we can render into
     Camera2D screen_cam;
+    Vector3 cam_pos;
+    f32 xfov;
 };
 
 internal void
