@@ -105,13 +105,15 @@ union Vector2 {
     };
 };
 
-
-
-constexpr internal Vector2
-v2() {
+constexpr Vector2
+V2() {
     return {};
 }
 
+constexpr Vector2
+V2(f32 x, f32 y) {
+    return {x, y};	
+}
 
 inline Vector2
 v2(f32 x, f32 y) {	return {x, y};	}
@@ -227,12 +229,14 @@ operator*=(Vector2 &a, s32 scale) { a = a * scale; }
 
 static Vector2
 operator/(Vector2 a, f32 den) {	
-    assert (den > 0); 
+    assert (den != 0); 
     return v2(a.x / den, a.y / den);	
 }
 
 static void
-operator/=(Vector2 &a, f32 den) {	a = a / den;	}
+operator/=(Vector2 &a, f32 den) {
+    a = a / den;	
+}
 
 static bool
 operator==(Vector2 a, Vector2 b) 
@@ -287,8 +291,7 @@ norm_and_noz(Vector2 *v)
 }
 
 internal Vector2
-normalize(Vector2 a)
-{
+normalize(Vector2 a) {
     f32 length_squared = normsq(a);
     assert (length_squared > 0);
     return a / sqroot(length_squared);
@@ -516,18 +519,62 @@ rotate_t(Vector2 *a, f32 t) {
 union Vector3 {
     struct { f32 x, y, z;       };
     struct { Vector2 xy; f32 z; };
-    
 };
 
-internal Vector3
-v3(f32 x, f32 y, f32 z) {	return {x, y, z};	}
+inline Vector3
+v3(f32 x, f32 y, f32 z) {	
+    return {x, y, z};	
+}
+
+inline Vector3
+v3(Vector2 v, f32 z) {	
+    return {v.x, v.y, z};	
+}
+
+constexpr Vector3
+V3() {
+    return {};	
+}
+
+constexpr Vector3
+V3(f32 x, f32 y, f32 z) {
+    return {x, y, z};	
+}
+
+static Vector3
+operator/(Vector3 a, f32 den) {	
+    assert (den != 0); 
+    return v3(a.x / den, a.y / den, a.z / den);	
+}
+
+static void
+operator/=(Vector3 &a, f32 den) {
+    a = a / den;	
+}
+
+
+
+inline f32
+dot3(Vector3 a, Vector3 b) { 
+    return a.x*b.x + a.y*b.y + a.z*b.z; 
+}
+
+inline f32
+normsq(Vector3 a) { 
+    return a.x*a.x + a.y*a.y + a.z*a.z; 
+}
 
 internal Vector3
-v3(Vector2 v, f32 z) {	return {v.x, v.y, z};	}
+normalize(Vector3 a) {
+    f32 length_squared = normsq(a);
+    assert (length_squared > 0);
+    return a / sqroot(length_squared);
+}
 
-internal f32
-dot3(Vector3 a, Vector3 b) 
-{ return a.x*b.x + a.y*b.y + a.z*b.z; }
+internal void
+normalize(Vector3 *a) {
+    *a = normalize(*a);
+}
 
 internal Vector3
 cross(Vector3 a, Vector3 b) {
@@ -544,6 +591,16 @@ union Vector4 {
     struct{ Vector2 xy, zw; };
     struct{ Vector3 xyz; f32 w; };
 };
+
+constexpr Vector4
+V4() {
+    return {};	
+}
+
+constexpr Vector4
+V4(f32 x, f32 y, f32 z, f32 w) {
+    return {x, y, z, w};	
+}
 
 internal Vector4
 v4(f32 x, f32 y, f32 z, f32 w) {	return {x, y, z, w};	}
@@ -698,6 +755,24 @@ static Matrix4x4 multiply(Matrix4x4 *m, Matrix4x4 *columns) {
     result.z_basis = multiply(m, columns->z_basis);
     result.w_basis = multiply(m, columns->w_basis);
     return result;
+}
+
+static Matrix4x4 lookat4x4(Vector3 pos, Vector3 dir, Vector3 up) {
+    Vector3 basis_z = normalize(dir);
+    Vector3 basis_y = normalize(up);
+    Vector3 basis_x = cross(basis_y, basis_z);
+    
+    //TODO just put this numbers in directly instead of doing the transpose
+    Matrix4x4 lookat = {};
+    lookat.x_basis.xyz = basis_x; 
+    lookat.y_basis.xyz = basis_y; 
+    lookat.z_basis.xyz = basis_z; 
+    lookat.e44 = 1;
+    transpose(&lookat);
+    lookat.e14 = -dot3(basis_x, pos);
+    lookat.e24 = -dot3(basis_y, pos);
+    lookat.e34 = -dot3(basis_z, pos);
+    return lookat;
 }
 
 //// rects

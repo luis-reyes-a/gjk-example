@@ -1045,27 +1045,7 @@ draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
     
     
     //glUniform2i(shader->u_viewport_dim, viewport_dim.x, viewport_dim.y);
-    Vector3 cam_basis_x = {1, 0, 0};
-    Vector3 cam_basis_y = {0, 1, 0};
-    Vector3 cam_basis_z = cross(cam_basis_x, cam_basis_y);
-    Vector3 cam_pos = rcx->cam_pos;
-    //Vector3 cam_basis_z = normalized(-cam_pos);
-    //Vector3 cam_basis_y = {}
-    //Vector3 at = {};
-    //Vector3 up = {}
-    
-    
-    
-    
-    Matrix4x4 lookat = {};
-    lookat.x_basis.xyz = cam_basis_x; 
-    lookat.y_basis.xyz = cam_basis_y; 
-    lookat.z_basis.xyz = cam_basis_z; 
-    lookat.e44 = 1;
-    transpose(&lookat);
-    lookat.e14 = -dot3(cam_basis_x, cam_pos);
-    lookat.e24 = -dot3(cam_basis_y, cam_pos);
-    lookat.e34 = -dot3(cam_basis_z, cam_pos);
+    Matrix4x4 lookat = lookat4x4(rcx->cam_pos, {0, 0, 1}, {0, 1, 0});
     
     #if 1
     f32 np = 0.1f;  //near plane
@@ -1073,18 +1053,16 @@ draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
     
     f32 aspect_w_over_h = (f32)viewport_dim.x / (f32)viewport_dim.y;
     
-    clamp(&rcx->xfov, 60, 120);
-    assert (rcx->xfov >= 60);
-    assert (rcx->xfov <= 120);
-    f32 np_width = 2*np*tan(rcx->xfov/2);
+    clamp(&rcx->xfov_t, 60.0f/360.0f, 120.0f/360.0f);
+    f32 np_width = 2*np*tan_t(rcx->xfov_t/2);
     f32 np_height = np_width / aspect_w_over_h;
     
     
     Matrix4x4 proj = {}; //from view space to
     proj.e11 = (2*np) / np_width;
     proj.e22 = (2*np) / np_height;
-    proj.e33 = (-np - fp) / (np - fp);
-    proj.e34 = (2*fp*np)  / (np - fp);
+    proj.e33 = (fp + np)  / (fp - np);
+    proj.e34 = (-2*fp*np) / (fp - np);
     proj.e43 = 1;
     #endif
     

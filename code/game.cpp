@@ -8,6 +8,7 @@ inline Platform *get_platform() {
 
 void init_game(Platform *platform) {
     PLATFORM = platform;
+    platform->rcx.xfov_t = 80.0f / 360.0f;
 }
 void update_game(Platform *platform) {
     platform->still_running = true;
@@ -71,7 +72,7 @@ void handle_input_game(User_Input *input) {
             }
         } else if (event->type == INPUT_EVENT_MOUSE_SCROLL) {
             Input_Event_Mouse_Scroll *scroll = (Input_Event_Mouse_Scroll *)event; 
-            rcx->xfov += scroll->scroll;
+            rcx->xfov_t += scroll->scroll/360.0f;
         }
     }
 }
