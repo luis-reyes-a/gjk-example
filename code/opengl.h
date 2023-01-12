@@ -243,6 +243,12 @@ struct Vertex3 {
     Vector2 uv;
 };
 
+#define ATLAS_SPRITE_MAX_COUNT 128
+
+enum Uniform_Block_Binding_Point : u32  {
+    UNIFORM_BINDING_POINT_ATLAS_RECT,
+};
+
 struct Simple_Shader_2D {
     GLuint pid;
 	GLuint vert_id;
@@ -256,6 +262,14 @@ struct Simple_Shader_2D {
     GLint u_quad_pos;
     GLint u_quad_dim;
     GLint u_quad_col;
+    
+    GLint u_atlas_rect_index;
+    GLint u_texture1_size;
+    GLint u_texture1;
+    
+    Uniform_Block_Binding_Point u_block_binding_point; //we specify what this is
+    GLuint u_block; //uniform block index
+    GLuint u_block_buffer; //uniform block buffer object
     
     void enable_vertex_attributes() {
         flush_errors();
@@ -276,7 +290,9 @@ struct Simple_Shader_2D {
         check_for_errors();
     }
     
-    void compile_shader() {
+    void compile_shader(u64 max_ubo_size, Uniform_Block_Binding_Point _u_block_binding_point) {
+        u_block_binding_point = _u_block_binding_point;
+        
         flush_errors();
         defer { check_for_errors(); };
         
@@ -294,11 +310,18 @@ struct Simple_Shader_2D {
         R"___(
          in vec2 vert_pos; //local pos offset to the vertex, in normalized space
          in vec2 vert_uv;
-    
-         uniform ivec2 u_viewport_dim;
+
+         //TODO we need to pass these in per quad, not as uniforms
          uniform vec2  u_quad_pos;
          uniform vec2  u_quad_dim;
          uniform vec4  u_quad_col;
+         uniform int u_atlas_rect_index;
+    
+         uniform ivec2 u_viewport_dim;
+         
+         uniform ivec2 u_texture1_size;
+         uniform sampler2D u_texture1;
+         
     
          out V2F {
              vec2 world_pos;
@@ -314,7 +337,6 @@ struct Simple_Shader_2D {
              
              v2f.uv = vert_uv;
              v2f.color = u_quad_col;
-             v2f.color.a *= u_quad_dim.x*v2f.uv.x;
          }
          )___";
         
@@ -328,9 +350,28 @@ struct Simple_Shader_2D {
              vec4 color;
          } v2f;
          
+         uniform ivec2 u_texture1_size;
+         uniform sampler2D u_texture1;
+         uniform int u_atlas_rect_index;
+         
+         struct Atlas_Rect {
+            ivec2 min;
+            ivec2 max;
+         };
+
+         layout (std140) uniform u_block {
+             Atlas_Rect atlas_rects[128];
+         };
+         
+         
          out vec4 frag_color;
          void main () {
-             frag_color = v2f.color;
+             Atlas_Rect rect = atlas_rects[u_atlas_rect_index];
+             vec2 uv_min = vec2(float(rect.min.x) / float(u_texture1_size.x), float(rect.min.y) / float(u_texture1_size.y));
+             vec2 uv_max = vec2(float(rect.max.x) / float(u_texture1_size.x), float(rect.max.y) / float(u_texture1_size.y));
+             vec2 uv = mix(uv_min, uv_max, v2f.uv);
+             vec4 tex1 = texture(u_texture1, uv);
+             frag_color = tex1 * v2f.color;
          }
         )___";
         
@@ -370,16 +411,34 @@ struct Simple_Shader_2D {
             assert (vert_uv != -1); //didn't find it, probably optimized out if never used in shader 
             
             u_viewport_dim = glGetUniformLocation(pid, "u_viewport_dim");
-            assert(u_viewport_dim != -1);
+            assert (u_viewport_dim != -1);
             
             u_quad_pos = glGetUniformLocation(pid, "u_quad_pos");
-            assert(u_quad_pos != -1);
+            assert (u_quad_pos != -1);
             
             u_quad_dim = glGetUniformLocation(pid, "u_quad_dim");
-            assert(u_quad_dim  != -1);
+            assert (u_quad_dim  != -1);
             
             u_quad_col = glGetUniformLocation(pid, "u_quad_col");
-            assert(u_quad_col != -1);
+            assert (u_quad_col != -1);
+            
+            u_atlas_rect_index = glGetUniformLocation(pid, "u_atlas_rect_index");
+            assert (u_atlas_rect_index != -1);
+            
+            u_texture1_size = glGetUniformLocation(pid, "u_texture1_size");
+            assert (u_texture1_size != -1);
+            
+            u_texture1 = glGetUniformLocation(pid, "u_texture1");
+            assert (u_texture1 != -1);
+            
+            u_block = glGetUniformBlockIndex(pid, "u_block"); 
+            assert (u_block != GL_INVALID_INDEX);
+            glUniformBlockBinding(pid, u_block, u_block_binding_point);
+            
+            
+            glGenBuffers(1, &u_block_buffer);
+            glBindBuffer(GL_UNIFORM_BUFFER, u_block_buffer);
+            glBufferData(GL_UNIFORM_BUFFER, max_ubo_size, 0, GL_DYNAMIC_DRAW);
         }
     }
 };
@@ -489,24 +548,24 @@ struct Simple_Shader_3D {
             assert (vert_uv != -1); //didn't find it, probably optimized out if never used in shader 
             
             u_xform = glGetUniformLocation(pid, "u_xform");
-            assert(u_xform != -1);
+            assert (u_xform != -1);
             
             //u_cam_pos = glGetUniformLocation(pid, "u_cam_pos");
-            //assert(u_cam_pos != -1);
+            //assert (u_cam_pos != -1);
             return true;
         }
     }
     
     void enable_vertex_attributes() {
         flush_errors();
-        
         glEnableVertexAttribArray(vert_pos);
         glVertexAttribPointer(vert_pos, 3, GL_FLOAT, GL_FALSE, 
                               sizeof(Vertex3), (void *)offsetof(Vertex3, pos));
         glEnableVertexAttribArray(vert_uv);
+        
         glVertexAttribPointer(vert_uv, 2, GL_FLOAT, GL_FALSE, 
                               sizeof(Vertex3), (void *)offsetof(Vertex3, uv));
-        check_for_errors();
+        check_for_errors(); //NOTE ERROR:1282 may happen if GL_ARRAY_BUFFER not bound
     }
     
     void disable_vertex_attributes() {
@@ -565,8 +624,7 @@ color_as_vector4(Color color) {
 }
 
 struct Opengl_Texture_Parameters {
-    enum Type
-    {
+    enum Type {
         COLOR, //NOTE assumed to be in sRGB space
         DEPTH,
         SINGLE_CHANNEL,
@@ -588,72 +646,57 @@ default_texture_params(Opengl_Texture_Parameters::Type type, s32 width, s32 heig
 
 
 //NOTE if MSAA data is num samples, otherwise it's a pointer to texure data...
-internal GLuint
-allocate_texture(Opengl_Texture_Parameters params) {
+internal bool
+allocate_texture(Opengl_Texture_Parameters params, GLuint *result) {
     flush_errors();
-    GLuint result;
-    glGenTextures(1, &result); //TODO handle if this fails
-    assert (result != 0); //NOTE can glGenTextures ever return 0 as a valid texture id?
+    glGenTextures(1, result); //NOTE can this every fail?... docs seem to indicate that it can't...
     assert (params.width  <= OpenGL.max_texture_size);
     assert (params.height <= OpenGL.max_texture_size);
     
     GLenum filter_type = 0;
     GLenum wrap_type   = 0;
     GLenum target_type = (params.multisample_count > 0) ? GL_TEXTURE_2D_MULTISAMPLE : GL_TEXTURE_2D;
-    glBindTexture(target_type, result);
+    glBindTexture(target_type, *result);
     u32 memory_allocation_size_guess = 0;
     
     switch(params.type) {
-    case Opengl_Texture_Parameters::COLOR:
-    {
+    case Opengl_Texture_Parameters::COLOR: {
         //TODO why the fuck does this have to be inverted?... is this why we've been having to multiply colors with themselves for a long time?...
         GLuint texture_format = (OpenGL.flags & OpenGL_SUPPORTS_SRGB_TEXTURE) ? GL_SRGB8_ALPHA8 : GL_RGB8;
         
-        if (params.multisample_count > 0)
-        {
-            CLAMP_HI(params.multisample_count, OpenGL.max_multisample_count);
+        if (params.multisample_count > 0) {
+            set_min2(params.multisample_count, OpenGL.max_multisample_count);
             glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, params.multisample_count,
-                texture_format,
-                params.width, params.height, 
-                GL_FALSE);
+                                    texture_format, params.width, params.height, GL_FALSE);
             filter_type = GL_LINEAR;
             wrap_type   = GL_CLAMP_TO_EDGE;
-        }
-        else
-        {
+        } else {
             //NOTE if data null, space is still allocated
-            glTexImage2D(GL_TEXTURE_2D, 0, texture_format,
-                params.width, params.height, 0, GL_RGBA, GL_UNSIGNED_BYTE, (GLvoid *)params.pixels);
+            glTexImage2D(GL_TEXTURE_2D, 0, texture_format, params.width, params.height, 
+                         0, GL_RGBA, GL_UNSIGNED_BYTE, (GLvoid *)params.pixels);
             filter_type = GL_NEAREST;
             wrap_type   = GL_REPEAT;
         }
     } break;
     
-    case Opengl_Texture_Parameters::DEPTH:
-    {
-        if (params.multisample_count > 0)
-        {
-            CLAMP_HI(params.multisample_count, OpenGL.max_multisample_count);
+    case Opengl_Texture_Parameters::DEPTH: {
+        if (params.multisample_count > 0) {
+            set_min2(params.multisample_count, OpenGL.max_multisample_count);
             glTexImage2DMultisample(GL_TEXTURE_2D_MULTISAMPLE, params.multisample_count,
-                GL_DEPTH_COMPONENT32,
-                params.width, params.height, 
-                GL_FALSE);
+                                    GL_DEPTH_COMPONENT32, params.width, params.height, GL_FALSE);
             filter_type = GL_LINEAR;
             wrap_type   = GL_CLAMP_TO_EDGE;
-        }
-        else
-        {
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32,
-                params.width, params.height, 0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, (GLvoid *)params.pixels);
+        } else {
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT32, params.width, params.height, 
+                         0, GL_DEPTH_COMPONENT, GL_UNSIGNED_BYTE, (GLvoid *)params.pixels);
             filter_type = GL_NEAREST;
             wrap_type   = GL_REPEAT;
         }
     } break;
     
-    case Opengl_Texture_Parameters::SINGLE_CHANNEL:
-    {
+    case Opengl_Texture_Parameters::SINGLE_CHANNEL: {
         glTexImage2D(GL_TEXTURE_2D, 0, GL_R8, params.width, params.height, 0, 
-            GL_RED, GL_UNSIGNED_BYTE, (GLvoid *)params.pixels);
+                     GL_RED, GL_UNSIGNED_BYTE, (GLvoid *)params.pixels);
         filter_type = GL_NEAREST;
         wrap_type   = GL_REPEAT;
         
@@ -672,7 +715,7 @@ allocate_texture(Opengl_Texture_Parameters params) {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, wrap_type);
     glBindTexture(target_type, 0);
     check_for_errors();
-    return result;
+    return true;
 }
 
 
@@ -698,7 +741,7 @@ attach_color_texture(Opengl_Framebuffer *framebuffer)
     Opengl_Texture_Parameters params = default_texture_params(Opengl_Texture_Parameters::COLOR, framebuffer->width, framebuffer->height);
     //params.is_srgb = framebuffer->is_srgb;
     params.multisample_count = framebuffer->multisample_count;
-    framebuffer->color_attachment = allocate_texture(params);
+    allocate_texture(params, &framebuffer->color_attachment);
     
     
     assert (framebuffer->id);
@@ -714,7 +757,7 @@ attach_depth_texture(Opengl_Framebuffer *framebuffer)
 {
     Opengl_Texture_Parameters params = default_texture_params(Opengl_Texture_Parameters::DEPTH, framebuffer->width, framebuffer->height);
     params.multisample_count = framebuffer->multisample_count;
-    framebuffer->depth_attachment = allocate_texture(params);
+    allocate_texture(params, &framebuffer->depth_attachment);
     
     GLenum target_type = 
         
@@ -913,7 +956,7 @@ init_opengl() {
     }
     
     //TODO log error output
-    OpenGL.simple_shader_2d.compile_shader();
+    OpenGL.simple_shader_2d.compile_shader(ATLAS_SPRITE_MAX_COUNT*sizeof(Rect2i), UNIFORM_BINDING_POINT_ATLAS_RECT);
     OpenGL.simple_shader_3d.compile_shader();
     
     
@@ -984,43 +1027,54 @@ debug_output_framebuffer(Opengl_Framebuffer *framebuffer, char *filepath)
 
 
 
+
 static void
-draw_2d_quads(Vector2i viewport_dim) {
+draw_2d_quads(Render_Context *rcx, Vector2i viewport_dim) {
+    if (rcx->quad_count <= 0) return; //nothing to do
     flush_errors();
     
     Simple_Shader_2D *shader = &OpenGL.simple_shader_2d;
     assert (shader->compiled);
     glUseProgram(shader->pid);
-    shader->enable_vertex_attributes();
     
     Vertex_Mesh *mesh = &OpenGL.square_mesh;
     glBindBuffer(GL_ARRAY_BUFFER,         mesh->vbo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo); //for glDrawElementsInstanced
+    shader->enable_vertex_attributes(); //not ARRAY_BUFFER must be bound
+    
     
     glUniform2i(shader->u_viewport_dim, viewport_dim.x, viewport_dim.y);
     
-    struct Quad {
-        Vector2 pos;
-        f32 w, h;
-        Vector4 color;
-    };
+    Texture_Atlas *atlas = rcx->atlas + TEXTURE_ATLAS_UI_FONT;
+    assert (atlas->loaded_on_gpu);
+    glActiveTexture(GL_TEXTURE0); // activate the texture unit first before binding texture
+    glBindTexture(GL_TEXTURE_2D, atlas->gpuid);
+    glUniform1i(shader->u_texture1, 0); //make slot point to texture "0"
+    glUniform2i(shader->u_texture1_size, (s32)atlas->width, (s32)atlas->height);
     
-    Quad quads[] = {
-        {{400, 400}, 200, 200, {1, 0, 0, 1}},
-        {{600, 600}, 150, 150, {0, 1, 0, 1}},
-        {{600, 200}, 150, 250, {0, 1, 1, 1}},
-        {{400, 500},  50, 400, {1, 1, 0, 1}},
-    };
     
-    for (s32 quad_index = 0; quad_index < countof(quads); quad_index += 1) {
-        Quad *quad = quads + quad_index;
+    glBindBuffer(GL_UNIFORM_BUFFER, shader->u_block_buffer); 
+    glBindBufferBase(GL_UNIFORM_BUFFER, shader->u_block_binding_point, shader->u_block_buffer);
+    s32 u_block_buffer_size = sizeof(atlas->rects[0]) * atlas->rect_count;
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, u_block_buffer_size, atlas->rects);
+    
+    for (s32 quad_index = 0; quad_index < rcx->quad_count; quad_index += 1) {
+        Textured_Quad *quad = rcx->quads + quad_index;
+        assert (quad->sprite_id.atlas_id == 0); //NOTE for the moment we only use the ui_font altas
         glUniform2f(shader->u_quad_pos, quad->pos.x, quad->pos.y);
         glUniform2f(shader->u_quad_dim, quad->w, quad->h);
-        glUniform4f(shader->u_quad_col, quad->color.x, quad->color.y, quad->color.z, quad->color.w);
+        
+        Vector4 col = unpack_v4(quad->color);
+        glUniform4f(shader->u_quad_col, col.r, col.g, col.b, col.a);
+        
+        glUniform1i(shader->u_atlas_rect_index, quad->sprite_id.offset);
+        
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
     
     
+    glBindBuffer(GL_ARRAY_BUFFER,         0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); //for glDrawElementsInstanced
     shader->disable_vertex_attributes();
     glUseProgram(0);
     
@@ -1037,11 +1091,13 @@ draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
     Simple_Shader_3D *shader = &OpenGL.simple_shader_3d;
     assert (shader->compiled);
     glUseProgram(shader->pid);
-    shader->enable_vertex_attributes();
     
     Vertex_Mesh *mesh = &OpenGL.cube_mesh;
     glBindBuffer(GL_ARRAY_BUFFER,         mesh->vbo);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo); //for glDrawElementsInstanced
+    shader->enable_vertex_attributes(); //NOTE buffers must be bound before
+    
+    
     
     
     //glUniform2i(shader->u_viewport_dim, viewport_dim.x, viewport_dim.y);
@@ -1108,8 +1164,8 @@ render_opengl(Platform *platform, Render_Context *rcx) {
     glClearColor(SQUARED(0.5f), SQUARED(0.5f), SQUARED(0.5f), 1);
     glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
     
-    //draw_2d_quads(viewport_dim);
     draw_3d_cubes(rcx, viewport_dim);
+    draw_2d_quads(rcx, viewport_dim);
     
     if (!draw_directly_into_backbuffer) {
         //we now have to blit into backbuffer to view 

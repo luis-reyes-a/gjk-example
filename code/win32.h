@@ -82,8 +82,7 @@ fprintf_valist(HANDLE output, char *fmt, va_list list) {
     return length;
 }
 
-internal void
-win32_logprintf_internal(String marker, String fileloc, char *fmt, ...) {
+void logprintf_internal(String marker, String fileloc, char *fmt, ...) {
     static boolint init = false;
     if (!init) {
         init = true;
@@ -91,11 +90,12 @@ win32_logprintf_internal(String marker, String fileloc, char *fmt, ...) {
         
         RESTORE_MEMORY_ARENA_ON_SCOPE_EXIT(&Temporary_Memory_Arena);
         //String log_filename = push_stringf(&Temporary_Memory_Arena, "%s_%d.log",  get_month_string(time.month).str, time.day);
-        String log_filename = push_stringf(&Temporary_Memory_Arena, "%02d-%02d-%d.log", time.month, time.day, time.year);
+        String log_filename = push_stringf(&Temporary_Memory_Arena, "%d-%02d-%02d.log", time.year, time.month, time.day);
         String log_filepath = push_stringf(&Temporary_Memory_Arena, "../logs/%s", log_filename.str);
         W32.log_file_handle = CreateFileA(log_filepath.str, GENERIC_WRITE, FILE_SHARE_READ, NULL, 
                                           OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
         if (W32.log_file_handle == INVALID_HANDLE_VALUE) {
+            //TODO this will fail if the log directory doesn't exist... we should probably just create the directory
             String error_msg = push_stringf(&Temporary_Memory_Arena, "Could not create log file %s. Abort?", log_filename.str);
             int ret = MessageBoxA(NULL, error_msg.str, "Error...", MB_YESNO);
             if (ret == IDYES) ExitProcess(1);
@@ -460,9 +460,7 @@ outputf(HANDLE handle, char *fmt, ...)
     va_end(list);
 }
 
-internal void
-win32_debug_printf_valist_internal(char *fmt, va_list list)
-{
+static void debug_printf_internal_valist(char *fmt, va_list list) {
     LOCAL_STRING(string, 1024);
     append_valist(&string, fmt, list);
     //remove_trailing_whitespace(&builder);
@@ -489,20 +487,17 @@ win32_debug_printf_valist_internal(char *fmt, va_list list)
         }
     }
     
-    if (stdout)
-    {
+    if (stdout) {
         DWORD num_characters_written;
         WriteConsoleA(stdout, string.str, string.length, &num_characters_written, NULL);    
     }
     #endif
 }
 
-internal void
-win32_debug_printf_internal(char *fmt, ...)
-{
+void debug_printf_internal(char *fmt, ...) {
     va_list list;
     va_start(list, fmt);
-    win32_debug_printf_valist_internal(fmt, list);
+    debug_printf_internal_valist(fmt, list);
     va_end(list);
 }
 
@@ -1030,36 +1025,36 @@ print_input_event_queue(User_Input *input) {
         if (key->on_press)    debug_printf(" (pressed)");
         if (key->is_down)     debug_printf(" (down)");
         if (key->on_release)  debug_printf(" (released)");       
-        debug_printf(" [%llu]\n", FRAME_INDEX);
+        debug_printf(" [%llu]\n", get_frame_index());
         
     } break;
     case INPUT_EVENT_MOUSE_SCROLL: {
         Input_Event_Mouse_Scroll *scroll = (Input_Event_Mouse_Scroll *)event; 
-        debug_printf("Scroll event %f [%llu]\n", scroll->scroll, FRAME_INDEX);
+        debug_printf("Scroll event %f [%llu]\n", scroll->scroll, get_frame_index());
     } break;
     case INPUT_EVENT_MOUSE_DELTA: {
         Input_Event_Mouse_Delta *delta = (Input_Event_Mouse_Delta *)event; 
-        debug_printf("Mouse delta event (%d, %d) [%llu]\n", delta->dx, delta->dy, FRAME_INDEX);
+        debug_printf("Mouse delta event (%d, %d) [%llu]\n", delta->dx, delta->dy, get_frame_index());
     } break;//delta mouse cursor pos change
     case INPUT_EVENT_TEXT: {
         Input_Event_Text *text = (Input_Event_Text *)event; 
-        debug_printf("Text event %s [%llu]\n", text->text, FRAME_INDEX);
+        debug_printf("Text event %s [%llu]\n", text->text, get_frame_index());
     } break;
     case INPUT_EVENT_FOCUS_CHANGE: {
         Input_Event_Focus_Change *change = (Input_Event_Focus_Change *)event; 
         debug_printf("Focus changed from %u to %u  [%llu]\n", 
-                     change->prev_focus, change->new_focus, FRAME_INDEX);
+                     change->prev_focus, change->new_focus, get_frame_index());
     } break;
     case INPUT_EVENT_FILE_DROP: {
         Input_Event_File_Drop *drop = (Input_Event_File_Drop *)event;
-        debug_printf("Event file drop %.*s [%llu]\n", drop->filepath.length, drop->filepath.str, FRAME_INDEX);
+        debug_printf("Event file drop %.*s [%llu]\n", drop->filepath.length, drop->filepath.str, get_frame_index());
     } break;
     case INPUT_EVENT_WINDOW_SIZE_CHANGED: {
         Input_Event_Window_Size_Changed *change = (Input_Event_Window_Size_Changed *)event; 
-        debug_printf("Event window size change to (%d, %d) [%llu]\n", change->new_width, change->new_height, FRAME_INDEX);
+        debug_printf("Event window size change to (%d, %d) [%llu]\n", change->new_width, change->new_height, get_frame_index());
     } break;
     case INPUT_EVENT_PROGRAM_WILL_EXIT: {
-        debug_printf("Event program will exit [%llu]\n", FRAME_INDEX);
+        debug_printf("Event program will exit [%llu]\n", get_frame_index());
     } break;
     
     default: assert (0);

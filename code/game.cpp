@@ -5,13 +5,29 @@ inline Platform *get_platform() {
     assert (PLATFORM);
     return PLATFORM;
 }
+inline u64 get_frame_index() {
+    return PLATFORM->frame_index;
+}
 
 void init_game(Platform *platform) {
     PLATFORM = platform;
     platform->rcx.xfov_t = 80.0f / 360.0f;
 }
+static Render_Context *get_render_context() {
+    return &PLATFORM->rcx;
+}
 void update_game(Platform *platform) {
     platform->still_running = true;
+    
+    static u16 sprite = 0;
+    static u32 tick = 0;
+    tick += 1;
+    if (tick > 15) {
+        tick = 0;
+        sprite += 1;
+        if (sprite >= CHARSET_COUNT) sprite = 0;
+    }
+    draw_quad(v2(600, 600), 300, 300, V4(1,0,0,1), SPRITEID(0, sprite));
 }
 
 void handle_input_game(User_Input *input) {

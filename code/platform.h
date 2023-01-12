@@ -3,17 +3,25 @@
 
 //TODO make these
 #define fader_printf(...)   do {} while(0)
-#define logprintf_(...)   do {} while(0)
-#define logprintf(...)    do {} while(0)
-#define debug_printf(...) do {} while(0)
+                                             
+#define LOGPRINTF_IDENTIFIER " "
+#define logprintf_(ident, fmt, ...) logprintf_internal(ident, UNIQUE_FILE_LOCATION_STRING, fmt, __VA_ARGS__)
+#define logprintf(fmt, ...)         logprintf_(strlit(LOGPRINTF_IDENTIFIER), fmt, __VA_ARGS__)
+#define debug_printf(fmt, ...) debug_printf_internal(fmt, __VA_ARGS__ )
+
+void debug_printf_internal(char *fmt, ...);
+inline unsigned long long get_frame_index();
 
 #define DEBUG_BUILD 1
 #include "ubiquitous.h"
+
 #include "intrinsics.h"
 #include "maths.h"
 #include "strings.h"
 #include "input.h"
 #include "draw.h"
+
+void logprintf_internal(String marker, String fileloc, char *fmt, ...);
 
 
 enum Visit_Files_Flags : u32 {
@@ -122,5 +130,7 @@ struct Platform {
     Platform_File_Group (*get_files_in_directory_of_type)(Memory_Arena *arena, String directory, String ext, boolint recursive);
     #endif
 };
+
+
 
 #endif //PLATFORM_H

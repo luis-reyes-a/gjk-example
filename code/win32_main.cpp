@@ -6,12 +6,18 @@
 
 #define DEFAULT_FRAMEBUFFER_WIDTH  1920
 #define DEFAULT_FRAMEBUFFER_HEIGHT 1920
+
+#define DEBUG_WRITE_OUT_FONT_ATLASES 1
 //#define DEFAULT_FRAMEBUFFER_HEIGHT 1080
 
 static Platform *PLATFORM;
 inline Platform *get_platform() {
     assert (PLATFORM);
     return PLATFORM;
+}
+static Render_Context *get_render_context() {
+    assert (PLATFORM);
+    return &PLATFORM->rcx;
 }
 inline u64 get_frame_index() {
     return get_platform()->frame_index;
@@ -55,9 +61,20 @@ init_thread_temporary_memory(u32 size = 1024*1024*32) {
 internal Platform *
 init_platform() {
     PLATFORM = (Platform *)win32_allocate(sizeof(Platform));
-    PLATFORM->game_memory_store = make_memory_arena(PLATFORM->entire_game_memory, sizeof(PLATFORM->entire_game_memory));
+    if (PLATFORM) {
+        PLATFORM->game_memory_store = make_memory_arena(PLATFORM->entire_game_memory, sizeof(PLATFORM->entire_game_memory));
+        Render_Context *rcx = &PLATFORM->rcx;
+        rcx->arena = push_memory_arena(&PLATFORM->game_memory_store, 1024*1024*4);
+        Temporary_Memory_Arena = push_memory_arena(&PLATFORM->game_memory_store, 1024*1024*4);
+    }
     return PLATFORM;
 }
+
+static Texture_Atlas *load_font_atlas_and_metrics(Texture_Atlas_ID atlas_id, Rasterized_Font *font, String filepath, s32 fontheight);
+    
+
+
+
 
 //NOTE only things game.cpp is "exporting" for this module to link to
 void init_game(Platform *platform);
@@ -65,7 +82,7 @@ void update_game(Platform *platform);
 void handle_input_game(User_Input *input);
 
 int CALLBACK 
-WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line_args, int show_code) {     
+WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line_args, int show_code) { 
     Platform *platform = init_platform();
     if (!platform) {
         MessageBoxA(null, "Couldn't allocate enough memory to run the game", "ERROR", MB_OK);
@@ -98,12 +115,32 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line_args, int sh
     platform->startup_seed = win32_make_random_seed();
     
     
-    
-    //platform->rcx.font = &pak->fonts[0];
-    //assert (platform->rcx.registered_cam_count == 0);
-    //register_camera("screen camera default");
-    
     init_game(platform);
+    Render_Context *rcx = &platform->rcx;
+    
+    //load fonts
+    {
+        String filepath = "C:/Windows/Fonts/consola.ttf"s;
+        Texture_Atlas *atlas = load_font_atlas_and_metrics(TEXTURE_ATLAS_UI_FONT, &rcx->ui_font, filepath, 26);
+        if (atlas) {
+            assert (atlas->type == TEXTURE_8BPP);
+            Opengl_Texture_Parameters params = default_texture_params(Opengl_Texture_Parameters::SINGLE_CHANNEL, atlas->width, atlas->height);
+            params.pixels = atlas->pixels;
+            
+            GLuint gpuid;
+            if (allocate_texture(params, &gpuid)) {
+                atlas->loaded_on_gpu = true;
+                atlas->gpuid = (u32)gpuid;
+            } else {
+                logprintf("Failed to load font %s onto gpu for rendering\n", filepath.str);
+            }
+        } else {
+            logprintf("Failed to load font %s\n", filepath.str);    
+        }
+        
+    }
+    
+    
 	#if 0 && DEBUG_BUILD
     DEBUG_init_internal();
     if (OpenGL.flags & OpenGL_SUPPORTS_SRGB_FRAMEBUFFER)
@@ -120,11 +157,9 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line_args, int sh
     
     while (platform->still_running) {
         //TODO how will I reset temp arenas for other threads?...well threads don't operate per frame right?, They just keeping running
-        defer { 
-            temp_memory_high_water_mark = max2(temp_memory_high_water_mark, Temporary_Memory_Arena.used);
-            Temporary_Memory_Arena.used = 0;
-            platform->frame_index += 1;
-        };
+        temp_memory_high_water_mark = max2(temp_memory_high_water_mark, Temporary_Memory_Arena.used);
+        Temporary_Memory_Arena.used = 0;
+        
         //NOTE is there a better way to see if we are the foreground window?
         #if 0
         if (platform->lock_cursor_to_screen && win32->window == GetForegroundWindow())
@@ -161,7 +196,6 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line_args, int sh
         }
         platform->mouse_pos_delta = platform->mouse_pos - last_mouse_pos;
         
-        Render_Context *rcx = &platform->rcx;
         render_context_begin_frame(rcx, window->client_width, window->client_height, platform->mouse_pos);
         handle_input_events(win32, platform, &handle_input_game);
         if (!platform->still_running) break; 
@@ -197,12 +231,146 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line_args, int sh
         timestamps[1] = get_timestamp();
         platform->dt = get_secs_elapsed(win32, timestamps[1], timestamps[0]);
         timestamps[0] = timestamps[1];
+        platform->frame_index += 1;
         //debug_printf("Framerate is %f", platform->dt * TARGET_FPS * 60);
     }
     
     debug_printf("~~~~~~~~~~EXITING @%llu~~~~~~~~~~\n", get_frame_index()); 
     debug_printf("Temp memory allocated was %'u\n", Temporary_Memory_Arena.size);
     debug_printf("Temp memory high water mark is %'u (%f%%)\n", temp_memory_high_water_mark, 100.0f * ((f32)temp_memory_high_water_mark / (f32)Temporary_Memory_Arena.size));
+}
+
+#define STB_TRUETYPE_IMPLEMENTATION
+#define STBTT_STATIC
+#include "../libs/stb_truetype.h"
+constexpr s32 FONT_H_OVERSAMPLE = 1; //not sure what 
+constexpr s32 FONT_V_OVERSAMPLE = 1; //these are for honestly...
+
+#if DEBUG_WRITE_OUT_FONT_ATLASES
+	#define STB_IMAGE_WRITE_IMPLEMENTATION
+	#define STB_IMAGE_WRITE_STATIC static
+	#define STBIW_ASSERT(x) assert(x)
+	#include "../libs/stb_image_write.h"
+#endif
+
+static Texture_Atlas *
+load_font_atlas_and_metrics(Texture_Atlas_ID atlas_id, Rasterized_Font *font, String filepath, s32 fontheight) {
+    Memory_Arena *temp = get_temp_memory();
+    RESTORE_MEMORY_ARENA_ON_SCOPE_EXIT(temp);
+    const unsigned char *file = (const unsigned char *)win32_open_entire_file_null_terminate(temp, filepath, 0);
+    if (!file) {
+        logprintf("Couldn't open %s to load font atlas\n", filepath);
+        return 0;
+    }
+    
+    Render_Context *rcx = get_render_context();
+    assert (atlas_id >= 0 && atlas_id < TEXTURE_ATLAS_COUNT);
+    Texture_Atlas *atlas = rcx->atlas + atlas_id;
+    assert (!atlas->loaded_on_ram); //NOTE this atlas needs to be freed first, otherwise we will leak memory
+    assert (!atlas->loaded_on_gpu); //NOTE this atlas needs to be freed first, otherwise we will leak memory
+    memzero(atlas, sizeof (*atlas));
+    memzero(font, sizeof  (*font));
+    
+    atlas->width  = 256;
+    atlas->height = 256;
+    s64 target_atlas_area = (fontheight*2)*(fontheight*2);
+    //NOTE theres some bit magic you can do to make this fast, but I don't know it
+    while (((s64)atlas->width*(s64)atlas->height) < target_atlas_area) {
+        if (atlas->width < atlas->height) atlas->width  *= 2;
+        else                             atlas->height *= 2;
+    }
+    
+    atlas->type   = TEXTURE_8BPP;
+    atlas->pixels = push_size(&rcx->arena, sizeof(u8)*(u32)atlas->width*(u32)atlas->height);
+    atlas->rects  = push_array(&rcx->arena, Rect2i, CHARSET_COUNT);
+    if (!atlas->pixels) {
+        logprintf("Not enough memory to allocate atlas pixels\n");
+    }
+    if (!atlas->rects) {
+        logprintf("Not enough memory to allocate atlas rects\n");
+    }
+    
+    stbtt_pack_context ctx;
+    if (!stbtt_PackBegin(&ctx, (unsigned char *)atlas->pixels, atlas->width, atlas->height, 0, 1, NULL)) {
+        logprintf("stbtt_PackBegin failed somehow...\n");
+        return 0;
+    }
+    stbtt_PackSetOversampling(&ctx, FONT_H_OVERSAMPLE, FONT_V_OVERSAMPLE);
+    
+    stbrp_rect stbrects[CHARSET_COUNT];
+    stbtt_packedchar chardata[CHARSET_COUNT];
+    for(int j = 0; j < CHARSET_COUNT; ++j) {
+        chardata[j].x0 = chardata[j].y0 = chardata[j].x1 = chardata[j].y1 = 0;    
+    }
+    
+    
+    stbtt_fontinfo info;
+    info.userdata = ctx.user_allocator_context;
+    stbtt_InitFont(&info, file, stbtt_GetFontOffsetForIndex(file, 0));
+    
+    stbtt_pack_range range_to_pass_in;
+    range_to_pass_in.first_unicode_codepoint_in_range = CHARSET_START;
+    range_to_pass_in.array_of_unicode_codepoints = NULL;
+    range_to_pass_in.num_chars                   = CHARSET_COUNT;
+    range_to_pass_in.chardata_for_range          = chardata;
+    range_to_pass_in.font_size                   = (float)fontheight;
+    
+   //NOTE here we take every rect and set its .w and .h 
+    stbtt_PackFontRangesGatherRects(&ctx, &info, &range_to_pass_in, 1, stbrects);
+    
+   //NOTE these actually finds a location for the rects, lays them out
+    stbtt_PackFontRangesPackRects(&ctx, stbrects, CHARSET_COUNT);
+    
+    if (!stbtt_PackFontRangesRenderIntoRects(&ctx, &info, &range_to_pass_in, 1, stbrects)) {
+        logprintf("stbtt_PackFontRangesRenderIntoRects failed to ratserize font glyphs into rect atlas->..\n");
+        return 0;
+    }
+    
+    for_index_inc (s32, i, CHARSET_COUNT) {
+        stbrp_rect stbr = stbrects[i];
+        Rect2i *dst = atlas->rects + i;
+        
+        if (!stbr.was_packed) {
+            logprintf("Failed to pack glyph index %d (%c?)\n", i, (char)(CHARSET_START + i));
+            continue;
+        }
+        
+        dst->min.x = stbr.x;
+        dst->min.y = stbr.y;
+        dst->max.x = stbr.x + stbr.w;
+        dst->max.y = stbr.y + stbr.h;
+    }
+    
+    //TODO does stbtt have option to do this automatically when rasterizing?...
+    #if 1 //flip each glyph vertically
+    for_index_inc(s32, i, CHARSET_COUNT) {
+        stbrp_rect rect = stbrects[i];
+        if (!rect.was_packed) continue;
+        
+        u32 stride = atlas->width;
+        u8 *lower_bottom = ((u8 *)atlas->pixels) + rect.x + rect.y*stride;
+        for_index_inc(s32, y, rect.h/2) {
+            for_index_inc(s32, x, rect.w) {
+                u8 *lower = lower_bottom + x + y*stride;
+                u8 *upper = lower_bottom + x + (rect.h - y - 1)*stride;
+                SWAP(*lower, *upper);
+            }   
+        }   
+    }
+    #endif
+    
+    stbtt_PackEnd(&ctx);
+    
+    #if DEBUG_WRITE_OUT_FONT_ATLASES
+    String filename = get_file_base_name(filepath);
+    String out_filename = push_stringf(temp, "../debug_output_%s.png", filename.str);
+    stbi_flip_vertically_on_write(true);
+    stbi_write_png(out_filename.str, atlas->width, atlas->height, 1, atlas->pixels, atlas->width*sizeof(u8));
+    #endif
+    
+    atlas->loaded_on_ram = true;
+    atlas->rect_count = CHARSET_COUNT;
+    return atlas;
 }
 
 #pragma pop_macro("LOGPRINTF_IDENTIFIER")
