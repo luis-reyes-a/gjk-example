@@ -19,15 +19,10 @@ static Render_Context *get_render_context() {
 void update_game(Platform *platform) {
     platform->still_running = true;
     
-    static u16 sprite = 0;
-    static u32 tick = 0;
-    tick += 1;
-    if (tick > 15) {
-        tick = 0;
-        sprite += 1;
-        if (sprite >= CHARSET_COUNT) sprite = 0;
-    }
-    draw_quad(v2(600, 600), 300, 300, V4(1,0,0,1), SPRITEID(0, sprite));
+    static f32 rotation_t = 0;
+    rotation_t += 0.01f;
+    draw_quad(  V2(400, 400), 400, 200, V4(1,0,0,1), rotation_t);
+    draw_string(V2(400, 400), "Hello\nWorld!"s, 36, V4(1,1,1,1)); 
 }
 
 void handle_input_game(User_Input *input) {

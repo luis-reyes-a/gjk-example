@@ -245,9 +245,23 @@ struct Vertex3 {
 
 #define ATLAS_SPRITE_MAX_COUNT 128
 
-enum Uniform_Block_Binding_Point : u32  {
-    UNIFORM_BINDING_POINT_ATLAS_RECT,
+//NOTE this serves as the binding point
+enum Uniform_Buffer_Object_ID : GLuint { 
+    UBO_ATLAS_RECTS,
+    UBO_COUNT,
 };
+
+struct Uniform_Buffer_Object {
+    Uniform_Buffer_Object_ID binding_point;
+    u32 max_buffer_size;
+    GLuint buffer;
+};
+
+static Uniform_Buffer_Object g_ubo[UBO_COUNT] = {
+    {UBO_ATLAS_RECTS, sizeof(Rect2i)*ATLAS_SPRITE_MAX_COUNT},
+};
+
+
 
 struct Simple_Shader_2D {
     GLuint pid;
@@ -259,6 +273,7 @@ struct Simple_Shader_2D {
     GLint vert_uv;
     
     GLint u_viewport_dim;
+    GLint u_rotation_t;
     GLint u_quad_pos;
     GLint u_quad_dim;
     GLint u_quad_col;
@@ -267,9 +282,81 @@ struct Simple_Shader_2D {
     GLint u_texture1_size;
     GLint u_texture1;
     
-    Uniform_Block_Binding_Point u_block_binding_point; //we specify what this is
-    GLuint u_block; //uniform block index
-    GLuint u_block_buffer; //uniform block buffer object
+    GLuint u_block_atlas_rects; //uniform block index
+    Uniform_Buffer_Object_ID ubo_id; //binding point for our guy
+    
+    static constexpr char *common_src = ""
+    "#version 330\n"
+    "#line " STRINGIFY((__LINE__ + 1)) "\n"
+    "//TODO we need to pass these in per quad, not as uniforms\n"
+    "uniform float u_rotation_t;\n"
+    "uniform vec2  u_quad_pos;\n"
+    "uniform vec2  u_quad_dim;\n"
+    "uniform vec4  u_quad_col;\n"
+    "uniform int u_atlas_rect_index;\n"
+    "\n"
+    "uniform ivec2 u_viewport_dim;\n"
+    "\n"
+    "uniform ivec2 u_texture1_size;\n"
+    "uniform sampler2D u_texture1;\n"
+    "\n"
+    "struct Atlas_Rect { \n"
+    "    ivec2 min;\n"
+    "    ivec2 max;\n"
+    "};\n"
+    "\n"
+    "layout (std140) uniform u_block_atlas_rects { \n"
+    "    Atlas_Rect atlas_rects[128];\n"
+    "};\n"
+    "\n"
+    "#define PI  3.14159265358979323846\n"
+    "#define TAU 6.28318530717958647692\n"
+    "#define V2F_STRUCT struct { \\\n"
+    "    vec2 world_pos;\\\n"
+    "    vec2 uv;\\\n"
+    "    vec4 color;\\\n"
+    "}\n"
+    "//COMMON_SRC END\n";
+    
+    static constexpr char *vert_src = ""
+    "#line " STRINGIFY((__LINE__ + 1)) "\n"
+    R"___(
+     in vec2 vert_pos; //local pos offset to the vertex, in normalized space
+     in vec2 vert_uv; 
+
+     out V2F_STRUCT v2f;
+     
+     void main () {
+         vec2 x_basis = vec2(cos(u_rotation_t*TAU), sin(u_rotation_t*TAU));
+         vec2 y_basis = vec2(-x_basis.y, x_basis.x);
+         x_basis *= u_quad_dim.x;
+         y_basis *= u_quad_dim.y;
+         v2f.world_pos = u_quad_pos + x_basis*vert_pos.x + y_basis*vert_pos.y; //screen pos of each vertex
+
+         vec2 pos = v2f.world_pos / u_viewport_dim; //makes pos [0, 1] in viewport
+         pos = (2*pos) - vec2(1,1); //makes pos [-1, 1] in viewport
+         gl_Position = vec4(pos, -1, 1); //NOTE we set z=-1, to indicate it should be close to us
+         
+         v2f.uv = vert_uv;
+         v2f.color = u_quad_col;
+     }
+     )___";
+    
+    static constexpr char *frag_src = ""
+    "#line " STRINGIFY((__LINE__ + 1)) "\n"
+    R"___(
+     in V2F_STRUCT v2f;
+
+     out vec4 frag_color;
+     void main () {
+         Atlas_Rect rect = atlas_rects[u_atlas_rect_index];
+         vec2 uv_min = vec2(float(rect.min.x) / float(u_texture1_size.x), float(rect.min.y) / float(u_texture1_size.y));
+         vec2 uv_max = vec2(float(rect.max.x) / float(u_texture1_size.x), float(rect.max.y) / float(u_texture1_size.y));
+         vec2 uv = mix(uv_min, uv_max, v2f.uv);
+         vec4 tex1 = texture(u_texture1, uv);
+         frag_color = tex1 * v2f.color;
+     }
+    )___";
     
     void enable_vertex_attributes() {
         flush_errors();
@@ -290,8 +377,8 @@ struct Simple_Shader_2D {
         check_for_errors();
     }
     
-    void compile_shader(u64 max_ubo_size, Uniform_Block_Binding_Point _u_block_binding_point) {
-        u_block_binding_point = _u_block_binding_point;
+    void compile_shader(Uniform_Buffer_Object_ID _ubo_id) {
+        ubo_id = _ubo_id;
         
         flush_errors();
         defer { check_for_errors(); };
@@ -304,81 +391,12 @@ struct Simple_Shader_2D {
             vert_id = frag_id = pid = 0;
         }
         
-        char* vert_src = ""
-        "#version 330\n"
-        "#line " STRINGIFY((__LINE__ + 1)) "\n"
-        R"___(
-         in vec2 vert_pos; //local pos offset to the vertex, in normalized space
-         in vec2 vert_uv;
-
-         //TODO we need to pass these in per quad, not as uniforms
-         uniform vec2  u_quad_pos;
-         uniform vec2  u_quad_dim;
-         uniform vec4  u_quad_col;
-         uniform int u_atlas_rect_index;
-    
-         uniform ivec2 u_viewport_dim;
-         
-         uniform ivec2 u_texture1_size;
-         uniform sampler2D u_texture1;
-         
-    
-         out V2F {
-             vec2 world_pos;
-             vec2 uv;
-             vec4 color;
-         } v2f;
-         
-         void main () {
-             v2f.world_pos = u_quad_pos + vert_pos*u_quad_dim; //screen pos of each vertex
-             vec2 pos = v2f.world_pos / u_viewport_dim; //makes pos [0, 1] in viewport
-             pos = (2*pos) - vec2(1,1); //makes pos [-1, 1] in viewport
-             gl_Position = vec4(pos, 0, 1);
-             
-             v2f.uv = vert_uv;
-             v2f.color = u_quad_col;
-         }
-         )___";
-        
-        char* frag_src = ""
-        "#version 330\n"
-        "#line " STRINGIFY((__LINE__ + 1)) "\n"
-        R"___(
-         in V2F {
-             vec2 world_pos;
-             vec2 uv;
-             vec4 color;
-         } v2f;
-         
-         uniform ivec2 u_texture1_size;
-         uniform sampler2D u_texture1;
-         uniform int u_atlas_rect_index;
-         
-         struct Atlas_Rect {
-            ivec2 min;
-            ivec2 max;
-         };
-
-         layout (std140) uniform u_block {
-             Atlas_Rect atlas_rects[128];
-         };
-         
-         
-         out vec4 frag_color;
-         void main () {
-             Atlas_Rect rect = atlas_rects[u_atlas_rect_index];
-             vec2 uv_min = vec2(float(rect.min.x) / float(u_texture1_size.x), float(rect.min.y) / float(u_texture1_size.y));
-             vec2 uv_max = vec2(float(rect.max.x) / float(u_texture1_size.x), float(rect.max.y) / float(u_texture1_size.y));
-             vec2 uv = mix(uv_min, uv_max, v2f.uv);
-             vec4 tex1 = texture(u_texture1, uv);
-             frag_color = tex1 * v2f.color;
-         }
-        )___";
-        
-        glShaderSource(vert_id, 1, &vert_src, 0);
+        GLchar *vs[] = {common_src, vert_src};
+        glShaderSource(vert_id, countof(vs), &vs[0], 0);
         glCompileShader(vert_id);
         
-        glShaderSource(frag_id, 1, &frag_src, 0);
+        GLchar *fs[] = {common_src, frag_src};
+        glShaderSource(frag_id, countof(fs), &fs[0], 0);
         glCompileShader(frag_id);
         
         glAttachShader(pid, vert_id);
@@ -416,6 +434,11 @@ struct Simple_Shader_2D {
             u_quad_pos = glGetUniformLocation(pid, "u_quad_pos");
             assert (u_quad_pos != -1);
             
+            u_rotation_t = glGetUniformLocation(pid, "u_rotation_t");
+            assert (u_rotation_t != -1);
+            
+            
+            
             u_quad_dim = glGetUniformLocation(pid, "u_quad_dim");
             assert (u_quad_dim  != -1);
             
@@ -431,14 +454,12 @@ struct Simple_Shader_2D {
             u_texture1 = glGetUniformLocation(pid, "u_texture1");
             assert (u_texture1 != -1);
             
-            u_block = glGetUniformBlockIndex(pid, "u_block"); 
-            assert (u_block != GL_INVALID_INDEX);
-            glUniformBlockBinding(pid, u_block, u_block_binding_point);
+            u_block_atlas_rects = glGetUniformBlockIndex(pid, "u_block_atlas_rects"); 
+            assert (u_block_atlas_rects != GL_INVALID_INDEX);
             
-            
-            glGenBuffers(1, &u_block_buffer);
-            glBindBuffer(GL_UNIFORM_BUFFER, u_block_buffer);
-            glBufferData(GL_UNIFORM_BUFFER, max_ubo_size, 0, GL_DYNAMIC_DRAW);
+            //NOTE seems like the binding stays active until the program is linked/relinked again
+            //meaning we can just set this here and not worry about it?....
+            glUniformBlockBinding(pid, u_block_atlas_rects, ubo_id); 
         }
     }
 };
@@ -454,22 +475,29 @@ struct Simple_Shader_3D {
     
     GLint u_xform;
     //GLint u_cam_pos;
+    GLint u_near; //optinal
+    GLint u_far;  //optinal
+    
+    static constexpr char* common_src = ""
+    "#version 330\n"
+    "#line " STRINGIFY((__LINE__ + 1)) "\n"
+    "uniform mat4x4 u_xform;\n"
+    "uniform float u_near;\n"
+    "uniform float u_far;\n"
+    "\n"
+    "#define V2F_STRUCT struct {\\\n"
+    "    vec2 uv;\\\n"
+    "    vec4 color;\\\n"
+    "}\n"
+    "//COMMON_SRC END\n\n";
     
     static constexpr char* vert_src = ""
-    "#version 330\n"
     "#line " STRINGIFY((__LINE__ + 1)) "\n"
     R"___(
      in vec3 vert_pos; //local pos offset to the vertex, in normalized space
      in vec2 vert_uv;
-     
-     //uniform vec2 u_cam_pos;
-     uniform mat4x4 u_xform;
-
-     out V2F {
-         vec2 uv;
-         vec4 color;
-     } v2f;
-     
+         
+     out V2F_STRUCT v2f;
      void main () { 
          gl_Position = u_xform*vec4(vert_pos, 1);
 
@@ -481,18 +509,19 @@ struct Simple_Shader_3D {
      )___";
     
     static constexpr char* frag_src = ""
-    "#version 330\n"
     "#line " STRINGIFY((__LINE__ + 1)) "\n"
     R"___(
-     in V2F {
-         vec2 uv;
-         vec4 color;
-     } v2f;
+     smooth in V2F_STRUCT v2f;
      
+     float linearize_depth(float d) {
+         float z_n = 2.0 * d - 1.0;
+         return 2.0 * u_near * u_far / (u_far + u_near - z_n * (u_far - u_near));
+     }
+
      out vec4 frag_color;
      void main () {
          frag_color = v2f.color;
-         frag_color.a += v2f.uv.x+v2f.uv.y;
+         frag_color.a *= v2f.uv.x + v2f.uv.y + v2f.color.x;
      }
     )___";
     
@@ -509,11 +538,11 @@ struct Simple_Shader_3D {
         }
         
         
-        GLchar *vs[] = {vert_src};
+        GLchar *vs[] = {common_src, vert_src};
         glShaderSource(vert_id, countof(vs), &vs[0], 0);
         glCompileShader(vert_id);
         
-        GLchar *fs[] = {frag_src};
+        GLchar *fs[] = {common_src, frag_src};
         glShaderSource(frag_id, countof(fs), &fs[0], 0);
         glCompileShader(frag_id);
         
@@ -549,6 +578,9 @@ struct Simple_Shader_3D {
             
             u_xform = glGetUniformLocation(pid, "u_xform");
             assert (u_xform != -1);
+            
+            u_near = glGetUniformLocation(pid, "u_near"); //NOTE this are optinal, we don't care if equal =1
+            u_far  = glGetUniformLocation(pid, "u_far");  //NOTE this are optinal, we don't care if equal =1
             
             //u_cam_pos = glGetUniformLocation(pid, "u_cam_pos");
             //assert (u_cam_pos != -1);
@@ -832,10 +864,6 @@ init_opengl() {
     glEnable(GL_FRAMEBUFFER_SRGB); //NOTE check to see if we can do this otherwise emulate in shader
     //also NOTE textures are in SRGB space, so we need to sample them and convert them into linear space before the end of the fragment shader
     
-    glEnable(GL_DEPTH_TEST);
-    //glDepthFunc(GL_GREATER); //smaller values pass through and overwrite, 1.0f is the "farthest away" 
-    glDepthFunc(GL_GEQUAL);
-    
     if (SwapIntervalEXT) {
         //TODO how can I figure out how long the interval is...should I just measure it?
         SwapIntervalEXT(1);
@@ -845,6 +873,16 @@ init_opengl() {
     GLuint vao; 
     glGenVertexArrays(1, &vao);
     glBindVertexArray(vao);
+
+    
+    for_index_inc (s32, i, UBO_COUNT) {
+        glGenBuffers(1, &g_ubo[i].buffer);
+        glBindBuffer(GL_UNIFORM_BUFFER, g_ubo[i].buffer);
+        assert (g_ubo[i].max_buffer_size > 0); // forgot to initalize?
+        glBufferData(GL_UNIFORM_BUFFER, g_ubo[i].max_buffer_size, 0, GL_DYNAMIC_DRAW);    
+    }
+    
+    
     
     #if 1
     //NOTE take a read at mjp article: https://mynameismjp.wordpress.com/2012/10/24/msaa-overview/
@@ -859,7 +897,7 @@ init_opengl() {
     glEnable(GL_SAMPLE_ALPHA_TO_COVERAGE);
     glGetIntegerv(GL_MAX_COLOR_TEXTURE_SAMPLES, &OpenGL.max_multisample_count);
     OpenGL.multisample_count = DEFAULT_MULTISAMPLE_COUNT;
-    CLAMP_HI(OpenGL.multisample_count, OpenGL.max_multisample_count);
+    set_min2(OpenGL.multisample_count, OpenGL.max_multisample_count);
     #endif
     
     
@@ -956,7 +994,7 @@ init_opengl() {
     }
     
     //TODO log error output
-    OpenGL.simple_shader_2d.compile_shader(ATLAS_SPRITE_MAX_COUNT*sizeof(Rect2i), UNIFORM_BINDING_POINT_ATLAS_RECT);
+    OpenGL.simple_shader_2d.compile_shader(UBO_ATLAS_RECTS);
     OpenGL.simple_shader_3d.compile_shader();
     
     
@@ -1052,16 +1090,18 @@ draw_2d_quads(Render_Context *rcx, Vector2i viewport_dim) {
     glUniform1i(shader->u_texture1, 0); //make slot point to texture "0"
     glUniform2i(shader->u_texture1_size, (s32)atlas->width, (s32)atlas->height);
     
-    
-    glBindBuffer(GL_UNIFORM_BUFFER, shader->u_block_buffer); 
-    glBindBufferBase(GL_UNIFORM_BUFFER, shader->u_block_binding_point, shader->u_block_buffer);
-    s32 u_block_buffer_size = sizeof(atlas->rects[0]) * atlas->rect_count;
-    glBufferSubData(GL_UNIFORM_BUFFER, 0, u_block_buffer_size, atlas->rects);
+    Uniform_Buffer_Object *ubo_atlas_rects = &g_ubo[UBO_ATLAS_RECTS];
+    glBindBuffer(GL_UNIFORM_BUFFER, ubo_atlas_rects->buffer); 
+    glBindBufferBase(GL_UNIFORM_BUFFER, ubo_atlas_rects->binding_point, ubo_atlas_rects->buffer);
+    u32 atlas_rect_data_size = sizeof(atlas->rects[0]) * atlas->rect_count;
+    assert (atlas_rect_data_size <= ubo_atlas_rects->max_buffer_size);
+    glBufferSubData(GL_UNIFORM_BUFFER, 0, atlas_rect_data_size, atlas->rects);
     
     for (s32 quad_index = 0; quad_index < rcx->quad_count; quad_index += 1) {
         Textured_Quad *quad = rcx->quads + quad_index;
         assert (quad->sprite_id.atlas_id == 0); //NOTE for the moment we only use the ui_font altas
         glUniform2f(shader->u_quad_pos, quad->pos.x, quad->pos.y);
+        glUniform1f(shader->u_rotation_t, quad->rotation_t);
         glUniform2f(shader->u_quad_dim, quad->w, quad->h);
         
         Vector4 col = unpack_v4(quad->color);
@@ -1133,6 +1173,15 @@ draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
     //rot.z_basis = {sin(theta), 0, cos(theta)};
     
     glUniformMatrix4fv(shader->u_xform, 1, GL_FALSE, m.e);
+    
+    if (shader->u_near != -1) {
+        glUniform1f(shader->u_near, np);
+    }
+    if (shader->u_far != -1) {
+        glUniform1f(shader->u_far, fp);
+    }
+    
+    
     //glUniform3f(shader->u_cam_pos, cam_pos.x, cam_pos.y, cam_pos.z);
     glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
     shader->disable_vertex_attributes();
@@ -1160,12 +1209,16 @@ render_opengl(Platform *platform, Render_Context *rcx) {
     
     
 	 
-    glClearDepth(0.0f);
+    glClearDepth(1.0f); //1 is furthest away in right-handed system
     glClearColor(SQUARED(0.5f), SQUARED(0.5f), SQUARED(0.5f), 1);
     glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
     
+    glEnable(GL_DEPTH_TEST);
+    glDepthFunc(GL_LEQUAL);
+    
     draw_3d_cubes(rcx, viewport_dim);
     draw_2d_quads(rcx, viewport_dim);
+    
     
     if (!draw_directly_into_backbuffer) {
         //we now have to blit into backbuffer to view 

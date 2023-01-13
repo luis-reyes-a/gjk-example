@@ -280,9 +280,11 @@ load_font_atlas_and_metrics(Texture_Atlas_ID atlas_id, Rasterized_Font *font, St
         else                             atlas->height *= 2;
     }
     
+    s32 num_sprites = CHARSET_COUNT + 1;
+    
     atlas->type   = TEXTURE_8BPP;
     atlas->pixels = push_size(&rcx->arena, sizeof(u8)*(u32)atlas->width*(u32)atlas->height);
-    atlas->rects  = push_array(&rcx->arena, Rect2i, CHARSET_COUNT);
+    atlas->rects  = push_array(&rcx->arena, Rect2i, num_sprites);
     if (!atlas->pixels) {
         logprintf("Not enough memory to allocate atlas pixels\n");
     }
@@ -297,7 +299,8 @@ load_font_atlas_and_metrics(Texture_Atlas_ID atlas_id, Rasterized_Font *font, St
     }
     stbtt_PackSetOversampling(&ctx, FONT_H_OVERSAMPLE, FONT_V_OVERSAMPLE);
     
-    stbrp_rect stbrects[CHARSET_COUNT];
+    // NOTE we add an extra rect to pack at end to rasterize a white texture square to
+    stbrp_rect stbrects[CHARSET_COUNT + 1]; 
     stbtt_packedchar chardata[CHARSET_COUNT];
     for(int j = 0; j < CHARSET_COUNT; ++j) {
         chardata[j].x0 = chardata[j].y0 = chardata[j].x1 = chardata[j].y1 = 0;    
@@ -311,22 +314,33 @@ load_font_atlas_and_metrics(Texture_Atlas_ID atlas_id, Rasterized_Font *font, St
     stbtt_pack_range range_to_pass_in;
     range_to_pass_in.first_unicode_codepoint_in_range = CHARSET_START;
     range_to_pass_in.array_of_unicode_codepoints = NULL;
-    range_to_pass_in.num_chars                   = CHARSET_COUNT;
+    range_to_pass_in.num_chars                   = CHARSET_COUNT; //NOT NUM_SPRITES, since this uses fontinfo and CHARSET_START to get glyph dimensions
     range_to_pass_in.chardata_for_range          = chardata;
     range_to_pass_in.font_size                   = (float)fontheight;
     
    //NOTE here we take every rect and set its .w and .h 
     stbtt_PackFontRangesGatherRects(&ctx, &info, &range_to_pass_in, 1, stbrects);
+    stbrects[num_sprites-1].w = stbrects[num_sprites-1].h = fontheight;
     
    //NOTE these actually finds a location for the rects, lays them out
-    stbtt_PackFontRangesPackRects(&ctx, stbrects, CHARSET_COUNT);
+    stbtt_PackFontRangesPackRects(&ctx, stbrects, num_sprites); //NOTE we actuallya ask to pack the extra square here
     
     if (!stbtt_PackFontRangesRenderIntoRects(&ctx, &info, &range_to_pass_in, 1, stbrects)) {
         logprintf("stbtt_PackFontRangesRenderIntoRects failed to ratserize font glyphs into rect atlas->..\n");
         return 0;
+    } else {
+        stbrp_rect r = stbrects[num_sprites-1]; //render white square
+        u8 *start = (u8 *)atlas->pixels + r.x + r.y*ctx.stride_in_bytes;
+        for (s32 y = 0; y < r.h; y += 1) {
+            for (s32 x = 0; x < r.w; x += 1) {
+                u8 *p = start + x + y*ctx.stride_in_bytes;
+                *p = 0xff;
+            }
+        }
     }
     
-    for_index_inc (s32, i, CHARSET_COUNT) {
+    //convert stbrects into our own rect array
+    for_index_inc (s32, i, num_sprites) {
         stbrp_rect stbr = stbrects[i];
         Rect2i *dst = atlas->rects + i;
         
@@ -341,9 +355,15 @@ load_font_atlas_and_metrics(Texture_Atlas_ID atlas_id, Rasterized_Font *font, St
         dst->max.y = stbr.y + stbr.h;
     }
     
+    //NOTE here we get the white square is and stick it directly in the atlas struct
+    //atlas->white_square_rect.min.x = stbrects[CHARSET_COUNT].x;
+    //atlas->white_square_rect.min.y = stbrects[CHARSET_COUNT].y;
+    //atlas->white_square_rect.max.x = stbrects[CHARSET_COUNT].x + stbrects[CHARSET_COUNT].w;
+    //atlas->white_square_rect.max.y = stbrects[CHARSET_COUNT].y + stbrects[CHARSET_COUNT].h;
+    
     //TODO does stbtt have option to do this automatically when rasterizing?...
     #if 1 //flip each glyph vertically
-    for_index_inc(s32, i, CHARSET_COUNT) {
+    for_index_inc(s32, i, CHARSET_COUNT) { //we don't have to flip our other textures I don't think, so we only go to CHARSET_COUNT
         stbrp_rect rect = stbrects[i];
         if (!rect.was_packed) continue;
         
@@ -369,7 +389,48 @@ load_font_atlas_and_metrics(Texture_Atlas_ID atlas_id, Rasterized_Font *font, St
     #endif
     
     atlas->loaded_on_ram = true;
-    atlas->rect_count = CHARSET_COUNT;
+    atlas->rect_count = num_sprites;
+    
+    //do font metrics stuff
+    font->texture_atlas_id = atlas_id;
+    font->pixel_height = fontheight;
+    
+    float scale =  stbtt_ScaleForPixelHeight(&info, (float)font->pixel_height);
+    int ascender, descender, linegap;
+    stbtt_GetFontVMetrics(&info, &ascender, &descender, &linegap); //unscaled coords
+    
+    font->descender = -(scale*descender); 
+    font->ascender  =  (scale*ascender); 
+    font->linegap   =  (scale*linegap);
+    
+    int advance, left_side_bearing;
+    stbtt_GetCodepointHMetrics(&info, ' ', &advance, &left_side_bearing); //unscaled coords
+    font->space_advance = (advance * scale);
+    
+    for (u32 codepoint = CHARSET_START; codepoint <= CHARSET_END; codepoint += 1) {
+        int glyph_index = stbtt_FindGlyphIndex(&info, codepoint);
+        int advance, lsb, x1, y1, x2, y2;
+        stbtt_GetGlyphHMetrics(&info, glyph_index, &advance, &lsb);
+        stbtt_GetGlyphBitmapBox(&info, glyph_index, scale * FONT_H_OVERSAMPLE, scale * FONT_V_OVERSAMPLE,
+                                &x1,&y1,&x2,&y2);
+        
+      //Glyph *glyph = get_glyph(font, codepoint);
+        Glyph *glyph = font->glyphs + (codepoint - CHARSET_START);
+        memzero(glyph, sizeof *glyph);
+        
+        glyph->ascender  = (f32)-y1;
+        glyph->descender = (f32)y2;
+        glyph->width = (f32)(x2 - x1);
+        
+        glyph->advance           = advance * scale;
+        glyph->left_side_bearing = lsb * scale;
+        
+        for(u32 codepoint_next = CHARSET_START; codepoint_next <= CHARSET_END; codepoint_next += 1)
+        {
+            glyph->kern[codepoint_next - CHARSET_START] = (f32)stbtt_GetGlyphKernAdvance(&info, codepoint, codepoint_next) * scale;
+        }
+    }
+    
     return atlas;
 }
 

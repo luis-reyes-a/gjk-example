@@ -75,6 +75,7 @@ constexpr s32 MAX_QUAD_COUNT = 2048;
 struct Textured_Quad {
     Vector2 pos;
     f32 w, h;
+    f32 rotation_t;
     Color color;
     Sprite_ID sprite_id;
 };
@@ -130,7 +131,7 @@ pack_color(Vector4 v) {
 }
 
 static void
-draw_quad(Vector2 pos, f32 w, f32 h, Vector4 col, Sprite_ID sprite_id) {
+draw_quad(Vector2 pos, f32 w, f32 h, Vector4 col, Sprite_ID sprite_id, f32 rotation_t = 0.0f) {
     Render_Context *rcx = get_render_context();
     if (rcx->quad_count >= MAX_QUAD_COUNT) return;
     
@@ -138,9 +139,81 @@ draw_quad(Vector2 pos, f32 w, f32 h, Vector4 col, Sprite_ID sprite_id) {
     quad->pos = pos;
     quad->w = w;
     quad->h = h;
+    quad->rotation_t = rotation_t;
     quad->color = pack_color(col);
     quad->sprite_id = sprite_id;
+}
+
+static void draw_quad(Vector2 pos, f32 w, f32 h, Vector4 col, f32 rotation_t = 0.0f) {
+    Sprite_ID sprite_id = {};
+    sprite_id.atlas_id = 0;
+    sprite_id.offset = CHARSET_COUNT; 
+    draw_quad(pos, w, h, col, sprite_id, rotation_t);
+}
+
+static Glyph *
+get_glyph(Rasterized_Font *font, u32 codepoint) {
+    Glyph *glyph = 0;
+    if (codepoint >= CHARSET_START && codepoint <= CHARSET_END) {
+        glyph = font->glyphs + codepoint - CHARSET_START;
+    }
+    return glyph;
+}
+
+static void
+draw_string(Vector2 start_pos, String str, f32 lineheight, Vector4 col) {
+    Render_Context *rcx = get_render_context();
+    Rasterized_Font *font = &rcx->ui_font;
     
+    Vector2 at = start_pos;
+    f32 scale = (lineheight / (f32)font->pixel_height); //amount to scale all glyphs by to fit lineheight
+    for (int i = 0; i < str.length; i += 1) {
+        char c = str.str[i];
+        if (c == ' ') {
+            at.x += scale*font->space_advance;
+            continue;
+        } else if ((c < CHARSET_START) || (c > CHARSET_END)) {
+            //can't render these chars
+            f32 space_width = scale*font->space_advance;
+            Vector2 p = {at.x + space_width*0.5f, at.y + space_width*0.5f};
+            
+            Sprite_ID sprite_id = {};
+            sprite_id.atlas_id = 0;
+            sprite_id.offset = CHARSET_COUNT; 
+            draw_quad(p, space_width, space_width, col, sprite_id);
+            
+            at.x += space_width;
+            continue;    
+        }
+        
+        Glyph *glyph = get_glyph(font, c);
+        f32 lsb = glyph->left_side_bearing * scale;
+        f32 w = glyph->width  * scale;
+        f32 ascender  = glyph->ascender  * scale; 
+        f32 descender = glyph->descender * scale;
+        
+        f32 advance = glyph->advance;
+        if ((i + 1) < str.length) {
+            char c2 = str.str[i+1];
+            if ((c2 >= CHARSET_START) && (c2 <= CHARSET_END)) {
+                advance += glyph->kern[c2 - CHARSET_START];
+            }
+        }
+        advance *= scale;
+        
+        Vector2 p = at;
+        p.x += lsb + 0.5f*w;
+        f32 ymin = p.y - descender;
+        f32 ymax = p.y + ascender;
+        p.y = ymin + 0.5f*(ymax - ymin);
+        
+        Sprite_ID sprite_id = {};
+        sprite_id.atlas_id = 0;
+        sprite_id.offset = c - CHARSET_START; //sprite offset in atlas
+        draw_quad(p, w, ymax-ymin, col, sprite_id);
+        
+        at.x += advance;
+    }
 }
 
 
