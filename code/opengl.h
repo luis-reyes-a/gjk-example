@@ -261,7 +261,169 @@ static Uniform_Buffer_Object g_ubo[UBO_COUNT] = {
     {UBO_ATLAS_RECTS, sizeof(Rect2i)*ATLAS_SPRITE_MAX_COUNT},
 };
 
+struct Circle_Shader_2D {
+    GLuint pid;
+	GLuint vs_id;
+	GLuint fs_id;
+    bool compiled;
+    
+    GLint u_viewport_dim;
+    GLint u_quad_pos;
+    GLint u_outer_radius;
+    GLint u_inner_radius;
+    GLint u_quad_col;
+    
+    GLint vert_pos;
+    GLint vert_uv;
+    
+    static constexpr char *common_src = ""
+    "#version 330\n"
+    "#line " STRINGIFY((__LINE__ + 1)) "\n"
+    "//TODO we need to pass these in per quad, not as uniforms\n"
+    "uniform float u_rotation_t;\n"
+    "uniform vec2  u_quad_pos;\n"
+    "uniform float u_outer_radius;\n"
+    "uniform float u_inner_radius;\n"
+    "uniform vec4  u_quad_col;\n"
+    "uniform ivec2 u_viewport_dim;\n"
+    "#define PI  3.14159265358979323846\n"
+    "#define TAU 6.28318530717958647692\n"
+    "#define V2F_STRUCT struct { \\\n"
+    "    vec2 world_pos;\\\n"
+    "    vec2 uv;\\\n"
+    "    vec4 color;\\\n"
+    "}\n"
+    "//COMMON_SRC END\n";
+    
+    static constexpr char *vert_src = ""
+    "#line " STRINGIFY((__LINE__ + 1)) "\n"
+    R"___(
+     in vec2 vert_pos; //local pos offset to the vertex, in normalized space
+     in vec2 vert_uv; 
 
+     out V2F_STRUCT v2f;
+     
+     void main () {
+         v2f.world_pos = u_quad_pos + vert_pos*(2*u_outer_radius); 
+
+         vec2 final_pos = v2f.world_pos / u_viewport_dim; //makes pos [0, 1] in viewport
+         final_pos = (2*final_pos) - vec2(1,1); //makes pos [-1, 1] in viewport
+         gl_Position = vec4(final_pos, -1, 1); //NOTE we set z=-1, to indicate it should be close to us
+         
+         v2f.uv = vert_uv;
+         v2f.color = u_quad_col;
+     }
+     )___";
+    
+    static constexpr char *frag_src = ""
+    "#line " STRINGIFY((__LINE__ + 1)) "\n"
+    R"___(
+     smooth in V2F_STRUCT v2f;
+
+     out vec4 frag_color;
+     void main () {
+         vec2 delta = v2f.world_pos - u_quad_pos;
+         float dist_from_center = length(delta);
+         if ((dist_from_center > u_outer_radius) ||
+             (dist_from_center < u_inner_radius)) {
+             discard;
+         }
+         frag_color = v2f.color;
+     }
+    )___";
+    
+    void enable_vertex_attributes() {
+        flush_errors();
+        
+        glEnableVertexAttribArray(vert_pos);
+        glVertexAttribPointer(vert_pos, 2, GL_FLOAT, GL_FALSE, 
+                              sizeof(Vertex2), (void *)offsetof(Vertex2, pos));
+        
+        if (vert_uv != -1) { //optional
+            glEnableVertexAttribArray(vert_uv);
+            glVertexAttribPointer(vert_uv, 2, GL_FLOAT, GL_FALSE, 
+                                  sizeof(Vertex2), (void *)offsetof(Vertex2, uv));    
+        }
+        
+        check_for_errors();
+    }
+    
+    void disable_vertex_attributes() {
+        flush_errors();
+        glDisableVertexAttribArray(vert_pos);
+        if (vert_uv != -1) {
+            glDisableVertexAttribArray(vert_uv);    
+        }
+        
+        check_for_errors();
+    }
+    
+    void compile_shader() {
+        flush_errors();
+        defer { check_for_errors(); };
+        
+        vs_id = glCreateShader(GL_VERTEX_SHADER);
+        fs_id = glCreateShader(GL_FRAGMENT_SHADER);
+        pid = glCreateProgram();
+        if (!vs_id || !fs_id || !pid) {
+            assert (0); //ran out of vram somehow?...
+            vs_id = fs_id = pid = 0;
+        }
+        
+        GLchar *vs[] = {common_src, vert_src};
+        glShaderSource(vs_id, countof(vs), &vs[0], 0);
+        glCompileShader(vs_id);
+        
+        GLchar *fs[] = {common_src, frag_src};
+        glShaderSource(fs_id, countof(fs), &fs[0], 0);
+        glCompileShader(fs_id);
+        
+        glAttachShader(pid, vs_id);
+        glAttachShader(pid, fs_id);
+        glLinkProgram(pid);
+        glValidateProgram(pid);
+        
+        GLint linked_ok = false, compiled_ok = false;
+        glGetProgramiv(pid, GL_LINK_STATUS,     &linked_ok);
+        glGetProgramiv(pid, GL_VALIDATE_STATUS, &compiled_ok);
+        compiled = linked_ok && compiled_ok; 
+        
+        if (!compiled) {
+            char vertex_log  [256];
+            char fragment_log[256];
+            char program_log [256];
+            glGetShaderInfoLog(vs_id, sizeof(vertex_log),   NULL, vertex_log);
+            glGetShaderInfoLog(fs_id, sizeof(fragment_log), NULL, fragment_log);
+            glGetProgramInfoLog(pid,    sizeof(program_log),  NULL, program_log);
+            breakpoint;
+            glDeleteShader(vs_id);
+            glDeleteShader(fs_id);
+            glDeleteProgram(pid);
+            vs_id = fs_id = pid = 0;
+        } else {
+            vert_pos = glGetAttribLocation(pid, "vert_pos");
+            assert (vert_pos != -1); //didn't find it, probably optimized out if never used in shader
+            
+            vert_uv = glGetAttribLocation(pid, "vert_uv");
+            //assert (vert_uv != -1); //didn't find it, probably optimized out if never used in shader 
+            
+            u_viewport_dim = glGetUniformLocation(pid, "u_viewport_dim");
+            assert (u_viewport_dim != -1);
+            
+            u_quad_pos = glGetUniformLocation(pid, "u_quad_pos");
+            assert (u_quad_pos != -1);
+            
+            u_outer_radius = glGetUniformLocation(pid, "u_outer_radius");
+            assert (u_outer_radius  != -1);
+            
+            u_inner_radius = glGetUniformLocation(pid, "u_inner_radius");
+            assert (u_inner_radius  != -1);
+            
+            u_quad_col = glGetUniformLocation(pid, "u_quad_col");
+            assert (u_quad_col != -1);
+        }
+    }
+};
 
 struct Simple_Shader_2D {
     GLuint pid;
@@ -616,6 +778,7 @@ struct Opengl {
     char *renderer;
     u32 flags;
     
+    Circle_Shader_2D circle_shader_2d;
     Simple_Shader_2D simple_shader_2d;
     Simple_Shader_3D simple_shader_3d;
     Vertex_Mesh square_mesh;
@@ -994,6 +1157,7 @@ init_opengl() {
     }
     
     //TODO log error output
+    OpenGL.circle_shader_2d.compile_shader();
     OpenGL.simple_shader_2d.compile_shader(UBO_ATLAS_RECTS);
     OpenGL.simple_shader_3d.compile_shader();
     
@@ -1064,7 +1228,51 @@ debug_output_framebuffer(Opengl_Framebuffer *framebuffer, char *filepath)
 
 
 
-
+static void
+draw_2d_circles(Render_Context *rcx, Vector2i viewport_dim) {
+    flush_errors();
+    
+    Circle_Shader_2D *shader = &OpenGL.circle_shader_2d;
+    assert (shader->compiled);
+    glUseProgram(shader->pid);
+    
+    Vertex_Mesh *mesh = &OpenGL.square_mesh;
+    glBindBuffer(GL_ARRAY_BUFFER,         mesh->vbo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo); //for glDrawElementsInstanced
+    shader->enable_vertex_attributes(); //not ARRAY_BUFFER must be bound
+    
+    glUniform2i(shader->u_viewport_dim, viewport_dim.x, viewport_dim.y);
+    
+    struct Circle {
+        Vector2 pos;
+        f32 outer_r, inner_r;
+        Vector4 col;
+    };
+    
+    Circle circles[] = {
+        {V2(200, 200), 100, 50,  V4(1,0,0,1)},
+        {V2(400, 200),  50,  45, V4(0,0,1,1)},
+        {V2(600, 300), 200, 25,  V4(1,1,0,1)},
+        {V2(500, 400), 150, 100, V4(1,0,1,1)},
+    };
+    
+    for (int i = 0; i < countof(circles); i += 1) {
+        Circle cir = circles[i]; 
+        glUniform2f(shader->u_quad_pos, cir.pos.x, cir.pos.y);
+        glUniform1f(shader->u_outer_radius, cir.outer_r);
+        glUniform1f(shader->u_inner_radius, cir.inner_r);
+        glUniform4f(shader->u_quad_col, cir.col.r, cir.col.g, cir.col.b, cir.col.a);
+        glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
+    }
+    
+    
+    glBindBuffer(GL_ARRAY_BUFFER,         0);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); //for glDrawElementsInstanced
+    shader->disable_vertex_attributes();
+    glUseProgram(0);
+    
+    check_for_errors();
+}
 
 static void
 draw_2d_quads(Render_Context *rcx, Vector2i viewport_dim) {
@@ -1115,6 +1323,7 @@ draw_2d_quads(Render_Context *rcx, Vector2i viewport_dim) {
     
     glBindBuffer(GL_ARRAY_BUFFER,         0);
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); //for glDrawElementsInstanced
+    glBindBuffer(GL_UNIFORM_BUFFER, 0); //for glDrawElementsInstanced
     shader->disable_vertex_attributes();
     glUseProgram(0);
     
@@ -1218,6 +1427,7 @@ render_opengl(Platform *platform, Render_Context *rcx) {
     
     draw_3d_cubes(rcx, viewport_dim);
     draw_2d_quads(rcx, viewport_dim);
+    draw_2d_circles(rcx, viewport_dim);
     
     
     if (!draw_directly_into_backbuffer) {

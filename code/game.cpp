@@ -1,4 +1,5 @@
 #include "platform.h"
+#include "gjk.cpp"
 
 static Platform *PLATFORM;
 inline Platform *get_platform() {
@@ -16,8 +17,13 @@ void init_game(Platform *platform) {
 static Render_Context *get_render_context() {
     return &PLATFORM->rcx;
 }
+
+static void draw(Shape *shape, Vector4 col) {
+    
+}
+
+
 void update_game(Platform *platform) {
-    platform->still_running = true;
     
     static f32 rotation_t = 0;
     rotation_t += 0.01f;

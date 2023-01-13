@@ -1069,7 +1069,7 @@ win32_make_random_seed() {
 }
 
 
-internal void
+internal bool //returns whether we should still be running
 handle_input_events(Win32 *win32, Platform *platform, void (*on_handle_event)(User_Input *)) {
     
     Memory_Arena *scratch = &Temporary_Memory_Arena;
@@ -1378,8 +1378,9 @@ handle_input_events(Win32 *win32, Platform *platform, void (*on_handle_event)(Us
 	//print_input_event_queue(input);
     on_handle_event(input);
     if (input->sent_out_program_will_exit_event) {
-        platform->still_running = false;
+        return false;
     }
+    return true;
 }
 
 

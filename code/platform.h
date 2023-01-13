@@ -73,7 +73,6 @@ struct Platform_Heap {
 
 struct Platform { 
     //stuff we send to platform
-    boolint still_running;
     boolint lock_cursor_to_screen;
     boolint user_wants_to_quit_app;
     

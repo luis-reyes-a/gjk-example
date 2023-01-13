@@ -111,7 +111,6 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line_args, int sh
     setup_opengl(win32);
     init_opengl();
     
-    platform->still_running = true;
     platform->startup_seed = win32_make_random_seed();
     
     
@@ -155,7 +154,8 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line_args, int sh
     
     u32 temp_memory_high_water_mark = 0;
     
-    while (platform->still_running) {
+    bool still_running = true;
+    while (still_running) {
         //TODO how will I reset temp arenas for other threads?...well threads don't operate per frame right?, They just keeping running
         temp_memory_high_water_mark = max2(temp_memory_high_water_mark, Temporary_Memory_Arena.used);
         Temporary_Memory_Arena.used = 0;
@@ -197,8 +197,8 @@ WinMain(HINSTANCE instance, HINSTANCE prev_instance, LPSTR cmd_line_args, int sh
         platform->mouse_pos_delta = platform->mouse_pos - last_mouse_pos;
         
         render_context_begin_frame(rcx, window->client_width, window->client_height, platform->mouse_pos);
-        handle_input_events(win32, platform, &handle_input_game);
-        if (!platform->still_running) break; 
+        still_running = handle_input_events(win32, platform, &handle_input_game);
+        if (!still_running) break;
         //if (input_result.quit_program) break; //anything special we want to do?..
         
         
