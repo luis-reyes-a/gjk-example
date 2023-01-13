@@ -201,8 +201,7 @@ atan(f32 ratio)
 }
 
 internal f32
-atan2(f32 y, f32 x)
-{
+atan2(f32 y, f32 x) {
     assert (!((x == 0) && (y == 0))); //TODO what do we return here/...
     m128 my = _mm_set_ss(y);
     m128 mx = _mm_set_ss(x);

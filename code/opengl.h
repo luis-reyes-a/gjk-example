@@ -1230,6 +1230,8 @@ debug_output_framebuffer(Opengl_Framebuffer *framebuffer, char *filepath)
 
 static void
 draw_2d_circles(Render_Context *rcx, Vector2i viewport_dim) {
+    if (rcx->circle_count <= 0) return; //nothing to do
+    
     flush_errors();
     
     Circle_Shader_2D *shader = &OpenGL.circle_shader_2d;
@@ -1243,25 +1245,17 @@ draw_2d_circles(Render_Context *rcx, Vector2i viewport_dim) {
     
     glUniform2i(shader->u_viewport_dim, viewport_dim.x, viewport_dim.y);
     
-    struct Circle {
-        Vector2 pos;
-        f32 outer_r, inner_r;
-        Vector4 col;
-    };
     
-    Circle circles[] = {
-        {V2(200, 200), 100, 50,  V4(1,0,0,1)},
-        {V2(400, 200),  50,  45, V4(0,0,1,1)},
-        {V2(600, 300), 200, 25,  V4(1,1,0,1)},
-        {V2(500, 400), 150, 100, V4(1,0,1,1)},
-    };
     
-    for (int i = 0; i < countof(circles); i += 1) {
-        Circle cir = circles[i]; 
-        glUniform2f(shader->u_quad_pos, cir.pos.x, cir.pos.y);
-        glUniform1f(shader->u_outer_radius, cir.outer_r);
-        glUniform1f(shader->u_inner_radius, cir.inner_r);
-        glUniform4f(shader->u_quad_col, cir.col.r, cir.col.g, cir.col.b, cir.col.a);
+    for (int i = 0; i < rcx->circle_count; i += 1) {
+        Draw_Circle *cir = rcx->circles + i; 
+        glUniform2f(shader->u_quad_pos, cir->pos.x, cir->pos.y);
+        glUniform1f(shader->u_outer_radius, cir->outer_r);
+        glUniform1f(shader->u_inner_radius, cir->inner_r);
+        
+        Vector4 col = unpack_v4(cir->color);
+        glUniform4f(shader->u_quad_col, col.r, col.g, col.b, col.a);
+        
         glDrawElements(GL_TRIANGLES, 6, GL_UNSIGNED_INT, 0);
     }
     

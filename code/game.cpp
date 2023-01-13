@@ -9,6 +9,9 @@ inline Platform *get_platform() {
 inline u64 get_frame_index() {
     return PLATFORM->frame_index;
 }
+static Memory_Arena *get_temp_memory(){
+    return get_platform()->main_thread_temp_memory;
+}
 
 void init_game(Platform *platform) {
     PLATFORM = platform;
@@ -19,16 +22,45 @@ static Render_Context *get_render_context() {
 }
 
 static void draw(Shape *shape, Vector4 col) {
-    
+    f32 thickness = 8;
+    switch (shape->type) {
+    case SHAPE_CIRCLE: {
+        f32 inner_r = max2(0, shape->dim.x - thickness);
+        draw_circle(shape->pos, shape->dim.x, col, inner_r);
+    } break;
+    case SHAPE_AABB: {
+        draw_bounding_box(shape->pos, shape->dim.x, shape->dim.y, thickness, col);
+    } break;
+    }
 }
 
+static u32 g_seed = 0xcafebabe;
+static u32 g_sel_shape = 0;
+static Shape g_shapes[2] = {
+    {SHAPE_CIRCLE, V2(400, 400), V2(150, 0)}, 
+    {SHAPE_AABB,   V2(400, 400), V2(125, 125)},
+};
+
+static Vector4 make_random_color_v4(u32 *seed) {
+    Color col;
+    col.argb = get_random_u32(seed);
+    col.a = 255;
+    return unpack_v4(col);
+}
 
 void update_game(Platform *platform) {
+    GJK_Result gjk = gjk_get_distance_apart(g_shapes[0], g_shapes[1]);
+    Vector4 col = (gjk.closest_dist <= 0) ? V4(1,0,0,1) : V4(1,1,1,1);
+    draw(&g_shapes[0], col);
+    draw(&g_shapes[1], col);
     
-    static f32 rotation_t = 0;
-    rotation_t += 0.01f;
-    draw_quad(  V2(400, 400), 400, 200, V4(1,0,0,1), rotation_t);
-    draw_string(V2(400, 400), "Hello\nWorld!"s, 36, V4(1,1,1,1)); 
+    Vector2 origin = V2(800, 800);
+    draw_quad(origin, 6, 6, V4(1,0,0,1)); 
+    gjk_draw_minkowski_difference(origin, g_shapes[0], g_shapes[1], 64, V4(0,0,1,1), 6);
+   
+    
+    String str = tprintf("Dist is %f", gjk.closest_dist);
+    draw_string(V2(800, 600), str, 24, V4(1,1,1,1));
 }
 
 void handle_input_game(User_Input *input) {
@@ -86,14 +118,33 @@ void handle_input_game(User_Input *input) {
                     rcx->cam_pos.z -= cam_speed; 
                 }
             } break;
+            
+            case KEY_MOUSE_LEFT: 
+            case KEY_MOUSE_RIGHT: {
+                if (key->is_down) {
+                    mark_handled(input, event);
+                    s32 index = (key->id == KEY_MOUSE_LEFT) ? 0 : 1;
+                    Shape *shape = g_shapes + index;
+                    shape->pos = v2(input->mouse_pos);
+                }
+            } break;
+            
             }
         } else if (event->type == INPUT_EVENT_MOUSE_SCROLL) {
-            Input_Event_Mouse_Scroll *scroll = (Input_Event_Mouse_Scroll *)event; 
-            rcx->xfov_t += scroll->scroll/360.0f;
+            Input_Event_Mouse_Scroll *scroll = (Input_Event_Mouse_Scroll *)event;
+            mark_handled(input, event);
+            
+            f32 scale = 4;
+            if (has_modifier(input, KEY_MOUSE_LEFT)) {
+                Shape *shape = g_shapes + 0;
+                shape->dim.x += scale*scroll->scroll;
+                shape->dim.y += scale*scroll->scroll;
+            } else if (has_modifier(input, KEY_MOUSE_LEFT)) {
+                Shape *shape = g_shapes + 1;
+                shape->dim.x += scale*scroll->scroll;
+            }
+            //rcx->xfov_t += scroll->scroll/360.0f;
         }
     }
 }
 
-static Memory_Arena *get_temp_memory(){
-    return null;
-}

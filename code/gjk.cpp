@@ -185,8 +185,8 @@ struct GJK_Solver_2D {
 		assert (!is_basically_zero(edge.dir)); //degenerate line case we failed to detect
         
         if (find_normalized_perp_in_dir(edge.dir, -simplex[index_to], &edge.n_to_origin)) {
-            f32 d1 = dot2(edge.dir, -simplex[index_to]);
-            if (d1 <= 0) { 
+            f32 d1 = dot2(-edge.dir, -simplex[index_to]);
+            if (d1 >= 0) { 
                 //NOTE if you imagine the edge line segment spanning along it's perp axis 
                 //to make a rectangle infinitely grow on that axis, we're saying the origin lies on that rect
                 //specifically on the side facing towards the origin.
@@ -200,6 +200,7 @@ struct GJK_Solver_2D {
             //if it's close enough, we say it falls on the edge line
             if (edge.smallest_dist_to_origin < GJK_ZERO_EPSILON) {
                 edge.origin_lies_on_edge_line = true;
+                edge.smallest_dist_to_origin  = 0;
             }
             
         } else {
@@ -208,10 +209,10 @@ struct GJK_Solver_2D {
             
             f32 edge_length = norm(edge.dir);
             assert (edge_length > GJK_ZERO_EPSILON);
-            Vector2 edge_dir_n = edge.dir / edge_length;
-            assert (!is_basically_zero(edge_dir_n));
+            Vector2 edge_dir_normalized = edge.dir / edge_length;
+            assert (!is_basically_zero(edge_dir_normalized));
             
-            f32 dist = dot2(edge_dir_n, -simplex[index_from]);
+            f32 dist = dot2(edge_dir_normalized, -simplex[index_from]);
             if (dist > edge_length) { //origin continues pass the edge line segment
                 edge.smallest_dist_to_origin = dist - edge_length; 
             } else if (dist < 0) {
@@ -238,8 +239,6 @@ make_gjk_solver_2d(Shape *s1, Shape *s2) {
     solver.s2.pos -= solver.s1.pos; 
     solver.s1.pos = {};
     
-    solver.s1 = *s1;
-    solver.s2 = *s2;
     solver.search_dir = {1, 0}; //it's more stable if this is same value on start
     
     return solver;
@@ -260,10 +259,10 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
     
     GJK_Result result = {};  
     result.closest_dist = F32_MAX;
+    int simplex_contains_origin = 0; //we set to numbers instead of true to know where it was set
     
     if (is_basically_zero(solver.simplex[0])) {
-        //we got lucky and instantly foind point where simplices overlap
-        //but NOTE we have to do some work to find direction
+        //got lucky and instantly foind point where simplices overlap
         result.closest_dist = 0;
         goto END_OF_PROCEDURE;
     }
@@ -273,15 +272,14 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
     solver.search_dir = -solver.simplex[0];
     solver.find_next_point();
     
-    int simplex_contains_origin = 0; //we set to numbers instead of true to know where it was set
     if (is_basically_zero(solver.simplex[0] - solver.simplex[1])) {
         //degenerate line
         goto END_OF_PROCEDURE;
     } else if (is_basically_zero(solver.simplex[0])) {
         //we got lucky and instantly foind point where simplices overlap
         //but NOTE we have to do some work to find direction
-        result.closest_dist = 0;
-        return result;
+        result = {};
+        goto END_OF_PROCEDURE;
     } else { //find new search dir
         GJK_Simplex_Edge edge10 = solver.make_edge(1, 0);
         if (edge10.origin_lies_on_edge_line) { //means we really can't keep searching
@@ -290,13 +288,15 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
                 simplex_contains_origin = 1; //run EPA
             } else {
                 //NOTE here we assume that closest_delta dir is beyond new point...
+                //TODO we may be more exact for extreme, elongated shapes if we try to find a new search dir anyways
+                //maybe by trying out both normals of the edge + current_search_dir and see if any lead us to a closer point...
                 result.closest_dist = edge10.smallest_dist_to_origin;
                 result.closest_delta = -solver.simplex[0];
             }
             goto END_OF_PROCEDURE;
         } else { //we continue searching
             if (edge10.smallest_dist_to_origin < result.closest_dist) {
-                result.closest_dist  = edge10.smallest_dist_to_origin;
+                result.closest_dist = edge10.smallest_dist_to_origin;
                 if (edge10.origin_between_endpoints) {
                     solver.search_dir = edge10.n_to_origin;
                     result.closest_delta = edge10.n_to_origin; //TODO mult with dist
@@ -318,9 +318,8 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
     for (int iteration_index = 0; iteration_index < GJK_MAX_ITERATION_COUNT; iteration_index += 1) {
         solver.find_next_point();
         if (is_basically_zero(solver.simplex[0])) {
-            //got lucky 
-            result.closest_dist  = 0;
-            result.closest_delta = {};
+            //got lucky
+            result = {};
             break;
         }
         
@@ -336,9 +335,12 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
         //NOTE here we test to see if we have a degenerate triangle case
         f32 collinearity = wedge2(delta_10, delta_21);
         if (absval(collinearity) < GJK_ZERO_EPSILON) { 
-            //triangles are collinear
+            //degenerate triangle
             break;
         }
+        
+        //NOTE we have to do these checks for edge10 and edge20 because otherwise
+        //we wouldn't have a valid n_to_origin for us to use afterwards
         
         GJK_Simplex_Edge edge10 = solver.make_edge(1, 0);
         if (edge10.origin_lies_on_edge_line) {
@@ -356,7 +358,7 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
             if (edge20.origin_between_endpoints) {
                 result = {};
             } else if (edge20.smallest_dist_to_origin < result.closest_dist) {
-                result.closest_dist  = edge10.smallest_dist_to_origin;
+                result.closest_dist  = edge20.smallest_dist_to_origin;
                 result.closest_delta = -solver.simplex[0];
             }
             break;
@@ -364,11 +366,12 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
         
         
         Vector2 tri_center = (solver.simplex[0] + solver.simplex[1] + solver.simplex[2]) / 3.0f;
-        Vector2 s0_to_tri_center = solver.simplex[0] - tri_center;
+        Vector2 s0_to_tri_center = tri_center - solver.simplex[0];
         f32 dot10 = dot2(edge10.n_to_origin, s0_to_tri_center); 
-        f32 dot20 = dot2(edge10.n_to_origin, s0_to_tri_center);
-        if (dot10 >= 0 && dot20 >= 0) {
+        f32 dot20 = dot2(edge20.n_to_origin, s0_to_tri_center);
+        if ((dot10 >= 0) && (dot20 >= 0)) {
             simplex_contains_origin = 2;
+            result = {};
             break; //run epa
         }
         
@@ -379,6 +382,7 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
                 break; //we're getting farther away
             }
             
+            index_to_replace = 2;
             result.closest_dist = edge10.smallest_dist_to_origin;
             if (edge10.origin_between_endpoints) {
                 solver.search_dir = edge10.n_to_origin;
@@ -392,10 +396,11 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
                 break; //we're getting farther away
             }
             
-            result.closest_dist = edge10.smallest_dist_to_origin;
-            if (edge10.origin_between_endpoints) {
-                solver.search_dir = edge10.n_to_origin;
-                result.closest_delta = edge10.n_to_origin;
+            index_to_replace = 1;
+            result.closest_dist = edge20.smallest_dist_to_origin;
+            if (edge20.origin_between_endpoints) {
+                solver.search_dir = edge20.n_to_origin;
+                result.closest_delta = edge20.n_to_origin;
             } else {
                 solver.search_dir = -solver.simplex[0];
                 result.closest_delta = -solver.simplex[0];
@@ -412,4 +417,27 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
     }
     return result;
          
+}
+
+
+
+internal void
+gjk_draw_minkowski_difference(Vector2 origin, Shape a, Shape b, s32 vertex_count, Vector4 col, f32 thickness = 0.1f) {
+    b.pos -= a.pos;
+    a.pos = {};
+    
+    assert (vertex_count > 3);
+    //f32  angle_delta = TAU / vertex_count;
+    f32 angle_t_delta = 1.0f / (f32)vertex_count;
+    Vector2 first_pos = gjk_support(&a, &b, v2(1, 0));
+    Vector2 prev_pos  = first_pos;
+    for (int i = 1; i < vertex_count; i += 1) {
+        Vector2 dir = eit2(angle_t_delta * i);
+        Vector2 pos = gjk_support(&a, &b, dir);
+        draw_line(origin + prev_pos, origin + pos, thickness, col);
+        prev_pos = pos;
+        
+        if (i == (vertex_count - 1))
+            draw_line(origin + pos, origin + first_pos, thickness, col);
+    }
 }

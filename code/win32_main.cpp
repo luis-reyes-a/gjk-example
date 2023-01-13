@@ -66,6 +66,7 @@ init_platform() {
         Render_Context *rcx = &PLATFORM->rcx;
         rcx->arena = push_memory_arena(&PLATFORM->game_memory_store, 1024*1024*4);
         Temporary_Memory_Arena = push_memory_arena(&PLATFORM->game_memory_store, 1024*1024*4);
+        PLATFORM->main_thread_temp_memory = &Temporary_Memory_Arena;
     }
     return PLATFORM;
 }

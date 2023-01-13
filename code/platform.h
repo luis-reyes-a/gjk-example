@@ -20,6 +20,7 @@ inline unsigned long long get_frame_index();
 #include "strings.h"
 #include "input.h"
 #include "draw.h"
+#include "random.h"
 
 void logprintf_internal(String marker, String fileloc, char *fmt, ...);
 
@@ -95,6 +96,7 @@ struct Platform {
     // but the thing is that the platform layer wants to use temp memory as well
     // while the game gets it's own private reserve
     Memory_Arena game_memory_store; //entire memory passed to game
+    Memory_Arena *main_thread_temp_memory;
     
     u8 entire_game_memory[1024*1024*1024 * 1];
     
