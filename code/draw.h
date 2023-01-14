@@ -188,6 +188,10 @@ static void draw_line(Vector2 l1, Vector2 l2, f32 thickness, Vector4 col) {
     draw_quad(pos, norm(dir), thickness, col, angle_t);
 }
 
+static void draw_line_delta(Vector2 l1, Vector2 delta, f32 thickness, Vector4 col) {
+    draw_line(l1, l1 + delta, thickness, col);
+}
+
 static void draw_bounding_box(Vector2 pos, f32 w, f32 h, f32 thickness, Vector4 col, f32 rotation_t = 0.0f) {
     Vector2 half_x_basis = eit2(rotation_t);
     Vector2 half_y_basis = perp(half_x_basis);

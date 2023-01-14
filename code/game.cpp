@@ -31,14 +31,24 @@ static void draw(Shape *shape, Vector4 col) {
     case SHAPE_AABB: {
         draw_bounding_box(shape->pos, shape->dim.x, shape->dim.y, thickness, col);
     } break;
+    case SHAPE_RECT: {
+        draw_bounding_box(shape->pos, shape->dim.x, shape->dim.y, thickness, col, shape->angle_t);
+    } break;
     }
 }
 
 static u32 g_seed = 0xcafebabe;
 static u32 g_sel_shape = 0;
+
+//NOTE this configuration was giving us false alerts when closest dist wasn't changing by all that much
+//static Shape g_shapes[2] = {
+    //{SHAPE_CIRCLE, V2(630, 474), V2(150, 0)}, 
+    //{SHAPE_RECT,   V2(400, 400), V2(125, 125), 1.0f/16.0f},
+//};
+
 static Shape g_shapes[2] = {
-    {SHAPE_CIRCLE, V2(400, 400), V2(150, 0)}, 
-    {SHAPE_AABB,   V2(400, 400), V2(125, 125)},
+    {SHAPE_CIRCLE, V2(821, 403), V2(150, 0)}, 
+    {SHAPE_RECT,   V2(800, 800), V2(600, 600), -1.0f/16.0f},
 };
 
 static Vector4 make_random_color_v4(u32 *seed) {
@@ -50,17 +60,45 @@ static Vector4 make_random_color_v4(u32 *seed) {
 
 void update_game(Platform *platform) {
     GJK_Result gjk = gjk_get_distance_apart(g_shapes[0], g_shapes[1]);
+    //breakpoint;
+    //g_shapes[1].angle_t += 0.001f;
+    
+    
     Vector4 col = (gjk.closest_dist <= 0) ? V4(1,0,0,1) : V4(1,1,1,1);
     draw(&g_shapes[0], col);
     draw(&g_shapes[1], col);
+    
+    if (gjk.closest_dist > 0) {
+        Vector2 dir = normalize(gjk.closest_delta);
+        Vector2 contact_point_on_s1 = get_furthest_point_generic(g_shapes[0], dir);
+        draw_line_delta(contact_point_on_s1, gjk.closest_delta, 6, V4(1,0,0,1));
+    }
     
     Vector2 origin = V2(800, 800);
     draw_quad(origin, 6, 6, V4(1,0,0,1)); 
     gjk_draw_minkowski_difference(origin, g_shapes[0], g_shapes[1], 64, V4(0,0,1,1), 6);
    
     
-    String str = tprintf("Dist is %f", gjk.closest_dist);
-    draw_string(V2(800, 600), str, 24, V4(1,1,1,1));
+    f32 lineheight = 24;
+    Vector2 line_pos = V2(800, 600); 
+    {
+        String str = tprintf("Shape1 Pos: (%.3f, %.3f)", g_shapes[0].pos.x, g_shapes[0].pos.y);
+        draw_string(line_pos, str, 24, V4(1,1,1,1));
+        line_pos.y -= lineheight;
+    }
+    
+    {
+        String str = tprintf("Shape2 Pos: (%.3f, %.3f)", g_shapes[1].pos.x, g_shapes[1].pos.y);
+        draw_string(line_pos, str, 24, V4(1,1,1,1));
+        line_pos.y -= lineheight;
+    }
+    
+    {
+        String str = tprintf("Dist is %f", gjk.closest_dist);
+        draw_string(line_pos, str, 24, V4(1,1,1,1));
+        line_pos.y -= lineheight;
+    }
+    
 }
 
 void handle_input_game(User_Input *input) {
