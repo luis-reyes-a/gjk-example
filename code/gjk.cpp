@@ -2,7 +2,9 @@
 //not all these iterations will occur, though. We exit loop when we think we are done
 #define GJK_MAX_ITERATION_COUNT 8
 //NOTE this basically controls a how close a vector/dist must be for us to consider it zero 
-#define GJK_ZERO_EPSILON 0.001f 
+#define GJK_ZERO_EPSILON 0.001f
+#define GJK_2D_DEBUG_DRAW_LINES false
+#define EPA_2D_DEBUG_DRAW_LINES true
 
 //uncomment this to turn off prints
 #pragma push_macro("debug_printf")
@@ -158,6 +160,8 @@ struct GJK_Solver_2D {
     Shape s1;
     Shape s2;
     
+    Vector2 debug_draw_pos;
+    
     void find_next_point() {
         simplex[2] = simplex[1];
         simplex[1] = simplex[0];
@@ -253,6 +257,8 @@ make_gjk_solver_2d(Shape *s1, Shape *s2) {
     solver.s1 = *s1;
     solver.s2 = *s2;
     
+    solver.debug_draw_pos = s2->pos;
+    
     //NOTE here we make s2 and s1 pos local to s1 pos, in hopes of improving floating point precision 
     solver.s2.pos -= solver.s1.pos; 
     solver.s1.pos = {};
@@ -269,6 +275,109 @@ struct GJK_Result {
     f32     closest_dist;
     Vector2 closest_delta;
 };
+
+//NOTE to maintain convention with GJK, this returns a negative penetration depth
+static f32 
+epa_get_penetration_depth(GJK_Solver_2D *solver, Vector2 *out_normal) {
+    Stack<Vector2, 16> polytope = {};
+    for (int i = 0; i < countof(solver->simplex); i += 1) {
+        polytope.add(solver->simplex[i]);
+    }
+    
+    auto get_approximate_winding_sign = [](f32 wedge) -> s32 {
+        return (wedge < -GJK_ZERO_EPSILON) ? -1 : ((wedge > GJK_ZERO_EPSILON) ? 1 : 0);
+    };
+    
+    Vector2 init_simplex_01 = solver->simplex[1]-solver->simplex[0];
+    Vector2 init_simplex_12 = solver->simplex[2]-solver->simplex[1];
+    s32 polytope_winding_order = get_approximate_winding_sign(wedge2(init_simplex_01, init_simplex_12));
+    assert (polytope_winding_order);
+    
+    f32 final_dist  = F32_MAX;
+    Vector2 final_n = {};
+    
+    while (polytope.count < polytope.max_count) {
+        s32 closest_edge_i0 = -1;
+        s32 closest_edge_i1 = -1;
+        Vector2 closest_edge_n = {};
+        f32 closest_edge_dist = F32_MAX;
+        for (int i = 0; i < polytope.count; i += 1) {
+            int next_i = (i < (polytope.count-1)) ? (i+1) : 0;
+            
+            Vector2 edge_dir = polytope[next_i] - polytope[i];
+            Vector2 edge_n   = noz(perp(edge_dir), GJK_ZERO_EPSILON);
+            assert (!is_basically_zero(edge_n));
+            
+            f32 edge_dir_wedge_edge_n = wedge2(edge_dir, edge_n);
+            s32 sign = get_approximate_winding_sign(edge_dir_wedge_edge_n);
+            assert (sign); //would only happend because of precision loss
+            
+            //if the normal has the same winding order, that means the normal is going inwards (almost like compleing the simplex itself)
+            //so we just negate it to get the outwards one
+            if (sign == polytope_winding_order) { 
+                edge_n *= -1;
+            }
+            
+            f32 edge_dist_to_origin = dot2(edge_n, polytope[i]);
+            if (edge_dist_to_origin < closest_edge_dist) {
+                closest_edge_dist = edge_dist_to_origin;
+                closest_edge_n = edge_n;
+                closest_edge_i0 = i;
+                closest_edge_i1 = next_i;
+            } 
+        }
+        
+        if (closest_edge_i0 == -1) {
+            break;
+        }   
+        
+        final_dist = closest_edge_dist;
+        final_n = closest_edge_n;
+        
+        Vector2 new_point = gjk_support(&solver->s1, &solver->s2, closest_edge_n);
+        f32 squared_dist_diff = normsq(new_point) - SQUARED(closest_edge_dist);
+        if (squared_dist_diff < GJK_ZERO_EPSILON) { 
+            //next_point didn't extend farther away from edge, meaning we're very close
+            //to the minkowski difference edge. So we just exit here
+            break;
+        }
+        
+        
+        Vector2 new_edge01 = noz(new_point - polytope[closest_edge_i0], GJK_ZERO_EPSILON);
+        Vector2 new_edge12 = noz(polytope[closest_edge_i1] - new_point, GJK_ZERO_EPSILON);
+        
+        //edges too close that it forms a degenerate line
+        if (is_basically_zero(new_edge01) || is_basically_zero(new_edge01)) {
+            break;
+        }
+        
+        
+        f32 new_edge_area = wedge2(new_edge01, new_edge12);
+        s32 new_winding_order = get_approximate_winding_sign(new_edge_area);
+        
+        if (new_winding_order != polytope_winding_order) {
+            //NOTE this means that the new point added forms a degenerate triangle between
+            //the other two insertion vertices, in which case we're close enough and bail
+            break;
+        } else {
+            polytope.insert_ordered(new_point, closest_edge_i1);
+        }
+    }
+    
+    #if EPA_2D_DEBUG_DRAW_LINES
+    for (int i = 0; i < polytope.count; i += 1) {
+        int next_i = (i < (polytope.count-1)) ? (i+1) : 0;
+            
+        Vector2 edge_dir = polytope[next_i] - polytope[i];
+        draw_line_delta(solver->debug_draw_pos + polytope[i], edge_dir, 4, V4(1,1,0,1));
+    }
+    #endif
+    
+    assert (final_dist != F32_MAX);
+    *out_normal = final_n;
+    return -final_dist;
+}
+
 
 static GJK_Result
 gjk_get_distance_apart(Shape s1, Shape s2) {
@@ -341,13 +450,17 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
         V4(.15f,0,0,1), V4(0,.15f,0,1), V4(0,0,.15f,1), V4(0,.15f,.15f,1),
     };
     
+    #if GJK_2D_DEBUG_DRAW_LINES
     draw_line(s2.pos + solver.simplex[1], s2.pos + solver.simplex[0], 4, V4(0,0,0,1));
+    #endif GJK_2D_DEBUG_DRAW_LINES
     
     //from this point on we have a "full simplex", which for 2D means a triangle
     for (int iteration_index = 0; iteration_index < GJK_MAX_ITERATION_COUNT; iteration_index += 1) {
         debug_printf("~~~~~~~~~~GJK Iteration: %d~~~~~~~~~~\n", iteration_index);
         solver.find_next_point();
+        #if GJK_2D_DEBUG_DRAW_LINES
         draw_line(s2.pos + solver.simplex[1], s2.pos + solver.simplex[0], 4, debug_colors[iteration_index]);
+        #endif
         if (is_basically_zero(solver.simplex[0])) {
             //got lucky
             result = {};
@@ -512,7 +625,8 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
     
     END_OF_PROCEDURE:;
     if (simplex_contains_origin) {
-        //do_epa();
+        result.closest_dist = epa_get_penetration_depth(&solver, &result.closest_delta);
+        result.closest_delta *= (-result.closest_dist);
     }
     return result;
          

@@ -1190,6 +1190,10 @@ struct Stack {
         } else return null;
     }
     
+    void insert_ordered(TYPE var, s32 index) {
+        *insert_ordered(index) = var;
+    }
+    
     TYPE *insert_unordered(s32 index) { //doesn't maintain order by simply swapping with current last element
         assert (count >= 0 && count <= max_count);
         assert (index >= 0 && index <= count); //<= because we may want to insert at new last element

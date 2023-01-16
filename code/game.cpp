@@ -60,7 +60,6 @@ static Vector4 make_random_color_v4(u32 *seed) {
 
 void update_game(Platform *platform) {
     GJK_Result gjk = gjk_get_distance_apart(g_shapes[0], g_shapes[1]);
-    //breakpoint;
     g_shapes[1].angle_t += 0.001f;
     
     
@@ -71,7 +70,11 @@ void update_game(Platform *platform) {
     if (gjk.closest_dist > 0) {
         Vector2 dir = normalize(gjk.closest_delta);
         Vector2 contact_point_on_s1 = get_furthest_point_generic(g_shapes[0], dir);
-        draw_line_delta(contact_point_on_s1, gjk.closest_delta, 6, V4(1,0,0,1));
+        draw_line_delta(contact_point_on_s1, gjk.closest_delta, 6, V4(0,1,0,1));
+    } else if (gjk.closest_dist < 0) {
+        Vector2 dir = normalize(gjk.closest_delta);
+        Vector2 contact_point_on_s1 = get_furthest_point_generic(g_shapes[0], dir);
+        draw_line_delta(contact_point_on_s1, -gjk.closest_delta, 6, V4(0,1,0,1));
     }
     
     Vector2 origin = V2(800, 800);
