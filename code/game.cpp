@@ -59,6 +59,9 @@ static Vector4 make_random_color_v4(u32 *seed) {
 }
 
 void update_game(Platform *platform) {
+    
+    draw_quad(V2(800, 800), 400, 400, V4(1,1,1,1));
+    
     GJK_Result gjk = gjk_get_distance_apart(g_shapes[0], g_shapes[1]);
     g_shapes[1].angle_t += 0.001f;
     
