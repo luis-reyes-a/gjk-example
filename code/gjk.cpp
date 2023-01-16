@@ -120,6 +120,7 @@ struct GJK_Simplex_Edge {
     Vector2 n_to_origin; //vector perp to edge dir facing towards the origin
     Vector2 smallest_delta_to_origin;
     f32 smallest_dist_to_origin;
+    f32 dist_to_origin_along_n; //only valid if origin_lies_on_edge_line (meaning it has an a valid normal)
     
     bool origin_lies_on_edge_line;
     bool origin_between_endpoints;
@@ -199,9 +200,11 @@ struct GJK_Solver_2D {
                 //to make a rectangle infinitely grow on that axis, we're saying the origin lies on that rect
                 //specifically on the side facing towards the origin.
                 edge.origin_between_endpoints = true;
-                edge.smallest_dist_to_origin  = dot2(edge.n_to_origin, -simplex[index_to]);
+                edge.dist_to_origin_along_n   = dot2(edge.n_to_origin, -simplex[index_to]);
+                edge.smallest_dist_to_origin  = edge.dist_to_origin_along_n;
                 edge.smallest_delta_to_origin = edge.n_to_origin*edge.smallest_dist_to_origin;
             } else { //otherwise closest point is at index_to
+                edge.dist_to_origin_along_n   = dot2(edge.n_to_origin, -simplex[index_to]);
                 edge.smallest_dist_to_origin  = norm(simplex[index_to]);
                 edge.smallest_delta_to_origin = -simplex[index_to];
             }
@@ -210,10 +213,11 @@ struct GJK_Solver_2D {
             //if it's close enough, we say it falls on the edge line
             if (edge.smallest_dist_to_origin < GJK_ZERO_EPSILON) {
                 edge.origin_lies_on_edge_line = true;
+                edge.dist_to_origin_along_n   = 0;
                 edge.smallest_dist_to_origin  = 0;
                 edge.smallest_delta_to_origin = {};
             }
-            
+            assert (edge.dist_to_origin_along_n >= 0);
         } else {
             //NOTE if we couldn't make a perpendicular direction, then that means the origin is along the edge line
             edge.origin_lies_on_edge_line = true;
@@ -407,7 +411,7 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
         
           //NOTE the first version was better but the .origin_between_endpoints check for both edges will give us false results
           //it turns out for really extreme, elongated shapes, that will cause us to faile
-        #if 1
+        #if 0
         //NOTE it seems like this test is not all that much better than what we have below...
         //the problem is when points on the simplex get too close together, the dot products returned here
         //can get way too close to zero, where the computations become unstable and we will return we're overlapping when we're not
@@ -419,6 +423,10 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
             f32 edge20_n_dot_to_s1 = dot2(edge20.n_to_origin, solver.simplex[1] - solver.simplex[0]);
             if (edge10_n_dot_to_s2 >= 0 && edge20_n_dot_to_s1 >= 0) {
                 debug_printf("!!! Triangle has origin !!!\n");
+                debug_printf("With triangle (%.3f,%.3f), (%.3f,%.3f), (%.3f,%.3f): collinearity=%f\n",
+                             solver.simplex[2].x, solver.simplex[2].y,
+                             solver.simplex[1].x, solver.simplex[1].y,
+                             solver.simplex[0].x, solver.simplex[0].y, collinearity);
                 simplex_contains_origin = 2;
                 result = {};
                 break; //run epa
@@ -426,37 +434,32 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
         } 
         
         #else
-        Vector2 tri_center = (solver.simplex[0] + solver.simplex[1] + solver.simplex[2]) / 3.0f;
-        Vector2 s0_to_tri_center = tri_center - solver.simplex[0];
-        f32 dot10 = dot2(edge10.n_to_origin, s0_to_tri_center); 
-        f32 dot20 = dot2(edge20.n_to_origin, s0_to_tri_center);
-        if ((dot10 >= 0) && (dot20 >= 0)) {
-            debug_printf("!!! Triangle has origin !!!\n");
-            simplex_contains_origin = 2;
-            result = {};
-            break; //run epa
-        }
-        #endif
+        f32 dist_edge10_to_2 = dot2(edge10.n_to_origin, solver.simplex[2] - solver.simplex[0]);
+        f32 dist_edge20_to_1 = dot2(edge20.n_to_origin, solver.simplex[1] - solver.simplex[0]);
         
-        
-        if (edge10.origin_between_endpoints && edge20.origin_between_endpoints) {
-            f32 edge10_n_dot_to_s2 = dot2(edge10.n_to_origin, solver.simplex[2] - solver.simplex[0]);
-            f32 edge20_n_dot_to_s1 = dot2(edge20.n_to_origin, solver.simplex[1] - solver.simplex[0]);
-            if (edge10_n_dot_to_s2 >= 0 && edge20_n_dot_to_s1 >= 0) {
+        if (dist_edge10_to_2 > GJK_ZERO_EPSILON && dist_edge20_to_1 > GJK_ZERO_EPSILON) {
+            //NOTE and this check tells us we're within the dist bounds we computed beforehand
+            if (dist_edge10_to_2 > edge10.dist_to_origin_along_n && 
+                dist_edge20_to_1 > edge20.dist_to_origin_along_n) { //this 
                 debug_printf("!!! Triangle has origin !!!\n");
+                debug_printf("With triangle (%.3f,%.3f), (%.3f,%.3f), (%.3f,%.3f): collinearity=%f\n",
+                             solver.simplex[2].x, solver.simplex[2].y,
+                             solver.simplex[1].x, solver.simplex[1].y,
+                             solver.simplex[0].x, solver.simplex[0].y, collinearity);
                 simplex_contains_origin = 2;
                 result = {};
                 break; //run epa
-            }    
+            }
         }
+        #endif
         
         //otherwise we keep searching along the normal of the closest edge
         s32 index_to_replace = 0; //0 will never get replaced so we default to it
         if (edge10.smallest_dist_to_origin < edge20.smallest_dist_to_origin) {
             index_to_replace = 2;
-            //if (edge10.smallest_dist_to_origin >= result.closest_dist) {
-                //break; //we're getting farther away
-            //}
+            if (edge10.smallest_dist_to_origin >= result.closest_dist) {
+                break; //we're getting farther away
+            }
             
             if (edge10.origin_between_endpoints) {
                 solver.search_dir = edge10.n_to_origin;
@@ -478,9 +481,9 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
             
         } else { //edge20 closest
             index_to_replace = 1;
-            //if (edge20.smallest_dist_to_origin >= result.closest_dist) {
-                //break; //we're getting farther away
-            //}
+            if (edge20.smallest_dist_to_origin >= result.closest_dist) {
+                break; //we're getting farther away
+            }
             
             //get new search dir
             if (edge20.origin_between_endpoints) {

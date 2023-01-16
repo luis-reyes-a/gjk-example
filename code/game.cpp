@@ -61,7 +61,7 @@ static Vector4 make_random_color_v4(u32 *seed) {
 void update_game(Platform *platform) {
     GJK_Result gjk = gjk_get_distance_apart(g_shapes[0], g_shapes[1]);
     //breakpoint;
-    //g_shapes[1].angle_t += 0.001f;
+    g_shapes[1].angle_t += 0.001f;
     
     
     Vector4 col = (gjk.closest_dist <= 0) ? V4(1,0,0,1) : V4(1,1,1,1);
