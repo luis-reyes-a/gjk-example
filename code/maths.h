@@ -552,6 +552,23 @@ operator/=(Vector3 &a, f32 den) {
     a = a / den;	
 }
 
+static Vector3
+operator*(Vector3 a, f32 s) {
+    Vector3 v = {a.x*s, a.y*s, a.z*s};
+    return v;
+}
+
+static Vector3
+operator*(f32 s, Vector3 a) {
+    Vector3 v = {a.x*s, a.y*s, a.z*s};
+    return v;
+}
+
+static void
+operator*=(Vector3 &a, f32 s) {
+    a = a * s;	
+}
+
 
 
 inline f32
@@ -774,6 +791,40 @@ static Matrix4x4 lookat4x4(Vector3 pos, Vector3 dir, Vector3 up) {
     lookat.e34 = -dot3(basis_z, pos);
     return lookat;
 }
+
+union Quaternion {
+    struct {
+        Vector3 xyz;
+        f32 w;
+    };
+    
+    struct {
+        f32 x, y, z, w;
+    };
+};
+
+inline Quaternion quaternion(f32 x, f32 y, f32 z, f32 w) {
+    Quaternion q = {x, y, z, w};
+    return q;
+}
+
+constexpr Quaternion QUATERNION(f32 x, f32 y, f32 z, f32 w) {
+    Quaternion q = {x, y, z, w};
+    return q;
+}
+
+//NOTE this assumes axis is already normalized
+static Quaternion quaternion_axis_angle_t(Vector3 axis, f32 angle_t) {
+    Quaternion q;
+    f32 half_angle_r = (0.5f*angle_t)*TAU;
+    f32 sin_of_angle = sin(half_angle_r); 
+    q.x = axis.x*sin_of_angle;
+    q.y = axis.y*sin_of_angle;
+    q.z = axis.z*sin_of_angle;
+    q.w = cos(half_angle_r);
+    return q;
+}
+
 
 //// rects
 struct Rect2i

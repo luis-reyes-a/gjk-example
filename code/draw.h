@@ -88,6 +88,24 @@ struct Draw_Circle {
     Color color;
 };
 
+enum Vertex_Mesh_Type : u32 {
+    MESH_TRIANGLE,
+    MESH_QUAD,
+    MESH_CUBE,
+    MESH_COUNT,
+};
+
+constexpr s32 MAX_MODEL_COUNT = 128;
+struct Model {
+    Vertex_Mesh_Type mesh_type;
+    //this is basically a 3x3 xform matrix
+    Vector3 pos;
+    Vector3 x_basis;
+    Vector3 y_basis;
+    Vector3 z_basis;
+    Color color;
+};
+
 
 struct Render_Context {
     Vector2i window_dim; //does not include border and title stuff. Just dimensions of window we can render into
@@ -105,6 +123,9 @@ struct Render_Context {
     
     s32 circle_count;
     Draw_Circle circles[MAX_CIRCLE_COUNT];
+    
+    s32 model_count;
+    Model models[MAX_MODEL_COUNT];
 };
 
 static Render_Context *get_render_context();
@@ -115,6 +136,7 @@ render_context_begin_frame(Render_Context *rcx, s32 window_w, s32 window_h, Vect
     rcx->window_dim = v2i(window_w, window_h);
     rcx->quad_count   = 0;
     rcx->circle_count = 0;
+    rcx->model_count  = 0;
     
     Camera2D *screen_cam = &rcx->screen_cam;
     screen_cam->view_dim = v2(window_w, window_h);
@@ -141,6 +163,57 @@ pack_color(Vector4 v) {
     return col;
 }
 
+static Model *
+make_unit_model(Vertex_Mesh_Type mesh, Vector3 pos) {
+    Render_Context *rcx = get_render_context();
+    if (rcx->model_count >= MAX_MODEL_COUNT) return null;
+    
+    
+    Model *model = rcx->models + rcx->model_count++;
+    model->pos       = pos;
+    model->mesh_type = mesh;
+    model->x_basis = V3(1, 0, 0);
+    model->y_basis = V3(0, 1, 0);
+    model->z_basis = V3(0, 0, 1);
+    model->color = {0xff, 0xff, 0xff, 0xff};
+    return model;
+}
+
+static void
+draw_cube(Vector3 pos, f32 w, f32 h, f32 d, Vector4 color = V4(1,1,1,1)) {
+    Model *model = make_unit_model(MESH_CUBE, pos);
+    if (model) {
+        model->x_basis *= w;
+        model->y_basis *= h;
+        model->z_basis *= d;    
+        model->color = pack_color(color);
+    }
+}
+
+//rotation version
+static void
+draw_cube(Vector3 pos, f32 w, f32 h, f32 d, Quaternion q, Vector4 color = V4(1,1,1,1)) {
+    Model *model = make_unit_model(MESH_CUBE, pos);
+    if (model) {
+        model->x_basis.x = 1 - 2*q.y*q.y - 2*q.z*q.z;
+        model->x_basis.y = 2*q.x*q.y     + 2*q.z*q.w;
+        model->x_basis.z = 2*q.x*q.z     - 2*q.y*q.w;
+        
+        model->y_basis.x = 2*q.x*q.y     - 2*q.z*q.w;
+        model->y_basis.y = 1 - 2*q.x*q.x - 2*q.z*q.z;
+        model->y_basis.z = 2*q.y*q.z     + 2*q.x*q.w;
+        
+        model->z_basis.x = 2*q.x*q.z     + 2*q.y*q.w;
+        model->z_basis.y = 2*q.y*q.z     - 2*q.x*q.w;
+        model->z_basis.z = 1 - 2*q.x*q.x - 2*q.y*q.y;
+       
+        model->x_basis *= w;
+        model->y_basis *= h;
+        model->z_basis *= d;
+        
+        model->color = pack_color(color);
+    }
+}
 
 
 static void

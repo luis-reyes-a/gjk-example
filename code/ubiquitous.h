@@ -1469,6 +1469,29 @@ struct Array {
         return add(&var);
     }
     
+    TYPE *add_array(s32 request_count) {
+        TYPE *result = null;
+        if ((count + request_count) <= max_count) {
+            result = e + count;
+            count += request_count;
+        } else {
+            s32 reserve_amt = max2(32, max_count);
+            while ((reserve_amt-count) < request_count) {
+                s32 next_reserve_amt = 2*reserve_amt;
+                assert (next_reserve_amt > reserve_amt); //overflow check
+                reserve_amt = next_reserve_amt;
+            }
+            
+            if (reserve(reserve_amt)) {
+                assert ((max_count-count) >= request_count);
+                result = e + count;
+                count += request_count;
+            }
+        } 
+        
+        return result;
+    }
+    
     Array_View<TYPE> to_view() {
         Array_View<TYPE> view = {};
         view.e = e;

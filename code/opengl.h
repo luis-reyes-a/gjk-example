@@ -219,29 +219,23 @@ enum UBO_Binding_Point {
 };
 
 
-struct Vertex_Mesh {
-    union {
-        struct {
-            GLuint vbo; //vertex pos+uv for quads that *NEVER* change
-            GLuint ebo; //index array for quad triangle. *NEVER* changes
-            //GLuint ibo; //per instance buffer object
-            //GLuint ubo;        
-        };
-        GLuint buffers[2];
-    }; 
-    s32 vertex_count;
-    s32 index_count;
-};
 
-struct Vertex2 {
-    Vector2 pos;
-    Vector2 uv;
-};
-
-struct Vertex3 {
+struct Vertex {
     Vector3 pos;
     Vector2 uv;
 };
+
+
+
+struct Vertex_Mesh {
+    s32 first_index;
+    s32 index_count;
+    s32 vertex_count;
+};
+
+
+
+
 
 #define ATLAS_SPRITE_MAX_COUNT 128
 
@@ -581,7 +575,7 @@ struct Simple_Shader_3D {
     GLint vert_uv;
     
     GLint u_xform;
-    //GLint u_cam_pos;
+    GLint u_color;
     GLint u_near; //optinal
     GLint u_far;  //optinal
     
@@ -591,6 +585,7 @@ struct Simple_Shader_3D {
     "uniform mat4x4 u_xform;\n"
     "uniform float u_near;\n"
     "uniform float u_far;\n"
+    "uniform vec4  u_color;\n"
     "\n"
     "#define V2F_STRUCT struct {\\\n"
     "    vec2 uv;\\\n"
@@ -608,10 +603,8 @@ struct Simple_Shader_3D {
      void main () { 
          gl_Position = u_xform*vec4(vert_pos, 1);
 
-         vec4 colors[] = vec4[7](vec4(1, 0, 0, 1), vec4(0, 1, 0, 1), vec4(0, 0, 1, 1), vec4(1, 1, 0, 1), 
-                                 vec4(0, 1, 1, 1), vec4(1, 0, 1, 1), vec4(1, 1, 1, 1));
-         v2f.color = colors[gl_VertexID % colors.length];
          v2f.uv = vert_uv;
+         v2f.color = u_color;
      }
      )___";
     
@@ -628,7 +621,6 @@ struct Simple_Shader_3D {
      out vec4 frag_color;
      void main () {
          frag_color = v2f.color;
-         frag_color.a *= v2f.uv.x + v2f.uv.y + v2f.color.x;
      }
     )___";
     
@@ -681,10 +673,13 @@ struct Simple_Shader_3D {
             assert (vert_pos != -1); //didn't find it, probably optimized out if never used in shader
             
             vert_uv = glGetAttribLocation(pid, "vert_uv");
-            assert (vert_uv != -1); //didn't find it, probably optimized out if never used in shader 
+            //assert (vert_uv != -1); //didn't find it, probably optimized out if never used in shader 
             
             u_xform = glGetUniformLocation(pid, "u_xform");
             assert (u_xform != -1);
+            
+            u_color = glGetUniformLocation(pid, "u_color");
+            assert (u_color != -1);
             
             u_near = glGetUniformLocation(pid, "u_near"); //NOTE this are optinal, we don't care if equal =1
             u_far  = glGetUniformLocation(pid, "u_far");  //NOTE this are optinal, we don't care if equal =1
@@ -699,21 +694,25 @@ struct Simple_Shader_3D {
         flush_errors();
         glEnableVertexAttribArray(vert_pos);
         glVertexAttribPointer(vert_pos, 3, GL_FLOAT, GL_FALSE, 
-                              sizeof(Vertex3), (void *)offsetof(Vertex3, pos));
-        glEnableVertexAttribArray(vert_uv);
+                              sizeof(Vertex), (void *)offsetof(Vertex, pos));
         
-        glVertexAttribPointer(vert_uv, 2, GL_FLOAT, GL_FALSE, 
-                              sizeof(Vertex3), (void *)offsetof(Vertex3, uv));
+        if (vert_uv != -1) {
+            glEnableVertexAttribArray(vert_uv);
+            
+            glVertexAttribPointer(vert_uv, 2, GL_FLOAT, GL_FALSE, 
+                                  sizeof(Vertex), (void *)offsetof(Vertex, uv));    
+        }
         check_for_errors(); //NOTE ERROR:1282 may happen if GL_ARRAY_BUFFER not bound
     }
     
     void disable_vertex_attributes() {
         flush_errors();
         glDisableVertexAttribArray(vert_pos);
-        glDisableVertexAttribArray(vert_uv);
+        if (vert_uv != -1) glDisableVertexAttribArray(vert_uv);
         check_for_errors();
     }
 };
+
 
 
 struct Opengl {
@@ -727,10 +726,9 @@ struct Opengl {
     Simple_Shader_2D simple_shader_2d;
     Simple_Shader_3D simple_shader_3d;
     
-    Vertex_Mesh cube_mesh;
-    
-    //GLuint big_circle_texture; //used by lightmap shader
-    //GLuint white_texture;
+    GLuint mesh_vbo;
+    GLuint mesh_ebo;
+    Vertex_Mesh meshes[MESH_COUNT];
     
     u32 max_texture_size;
     
@@ -963,6 +961,113 @@ set_multisample_count(s32 new_multisample_count)
     }
 }
 
+static void 
+load_simple_meshes_vbo_and_ebo() {
+    Memory_Arena *temp = get_temp_memory();
+    RESTORE_MEMORY_ARENA_ON_SCOPE_EXIT(temp);
+    
+    Array<Vertex> vertex_array = make_array<Vertex>(temp, 512);
+    Array<u32> index_array = make_array<u32>(temp, 1024);
+    
+    auto init_mesh = [&vertex_array, &index_array](Vertex_Mesh *mesh, Vertex *vertices, s32 vertex_count, u32 *indices, s32 index_count) {
+        mesh->first_index = index_array.count; 
+        mesh->index_count = index_count;
+        u32 *dst_i = index_array.add_array(index_count);
+        assert (dst_i);
+        
+        s32 first_vertex_offset = vertex_array.count;
+        for (int i = 0; i < index_count; i += 1) {
+            dst_i[i] = first_vertex_offset + indices[i];
+        }
+        
+        mesh->vertex_count = vertex_count;
+        Vertex *dst_v = vertex_array.add_array(vertex_count);
+        assert (dst_v);
+        memcopy(dst_v, vertices, sizeof(vertices[0])*vertex_count);
+    };
+    
+    for (int i = 0; i < MESH_COUNT; i += 1) {
+        Vertex_Mesh *mesh = OpenGL.meshes + i;
+        switch (i) {
+        case MESH_TRIANGLE: {
+            //f32 height = 0.86602540378f;
+            f32 half_h = 0.43301270189f;
+            Vertex vertices[] {
+                {{-0.5f, -half_h, 0.0f},  {0, 0}}, //0 front, bot left
+                {{+0.5f, -half_h, 0.0f},  {1, 0}}, //1 front, top left
+                {{+0.0f, +half_h, 0.0f}, {0.5f, 1}}, //2 front, bot right   
+            };
+            u32 indices[] = {
+                0, 1, 2,
+            };
+            init_mesh(mesh, vertices, countof(vertices), indices, countof(indices));
+        } break;
+        case MESH_QUAD: {
+            Vertex vertices[] {
+                {{-0.5f, -0.5f, 0.0f}, {0, 0}}, //0 front, bot left
+                {{-0.5f, +0.5f, 0.0f}, {0, 1}}, //1 front, top left
+                {{+0.5f, -0.5f, 0.0f}, {1, 0}}, //2 front, bot right
+                {{+0.5f, +0.5f, 0.0f}, {1, 1}}, //3 front, top right    
+            };
+            u32 indices[] = {
+                0, 2, 1,
+                1, 2, 3,
+            };
+            init_mesh(mesh, vertices, countof(vertices), indices, countof(indices));
+        } break;
+        case MESH_CUBE: {
+            Vertex vertices[] = {
+                {{-0.5f, -0.5f, +0.5f}, {0, 0}}, //0 front, bot left
+                {{-0.5f, +0.5f, +0.5f}, {0, 1}}, //1 front, top left
+                {{+0.5f, -0.5f, +0.5f}, {1, 0}}, //2 front, bot right
+                {{+0.5f, +0.5f, +0.5f}, {1, 1}}, //3 front, top right
+                
+                {{-0.5f, -0.5f, -0.5f}, {0, 0}}, //4 back, bot left
+                {{-0.5f, +0.5f, -0.5f}, {0, 1}}, //5 back, top left
+                {{+0.5f, -0.5f, -0.5f}, {1, 0}}, //6 back, bot right
+                {{+0.5f, +0.5f, -0.5f}, {1, 1}}, //7 back, top right
+            };
+            
+            u32 indices[] = { //can we use a smaller size here?
+                0, 2, 1, //front
+                1, 2, 3,
+                
+                1, 3, 5, //top
+                5, 3, 7,
+                
+                6, 4, 7, //back
+                7, 4, 5,
+                
+                4, 6, 0, //bottom
+                0, 6, 2,
+                
+                2, 6, 3, //right
+                3, 6, 7,
+                
+                4, 0, 5, //left
+                5, 0, 1,
+            };
+            init_mesh(mesh, vertices, countof(vertices), indices, countof(indices));
+        } break;
+        }
+    }
+    
+    
+    glGenBuffers(1, &OpenGL.mesh_vbo);
+    glGenBuffers(1, &OpenGL.mesh_ebo);
+    
+    glBindBuffer(GL_ARRAY_BUFFER, OpenGL.mesh_vbo);
+    s32 vertices_size = sizeof(Vertex)*vertex_array.count;
+    glBufferData(GL_ARRAY_BUFFER, vertices_size, vertex_array.e, GL_STATIC_DRAW); 
+    
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, OpenGL.mesh_ebo);
+    s32 indices_size = sizeof(u32)*index_array.count;
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices_size, index_array.e, GL_STATIC_DRAW); 
+    
+    debug_printf("Mesh vbo is %d bytes (%d vertices)\n", vertices_size, vertex_array.count);
+    debug_printf("Mesh ebo is %d bytes (%d indices)\n",  indices_size,  index_array.count);
+}
+
 internal void
 init_opengl() {
     //glEnable(GL_CULL_FACE);// for 2D we can just negate the basis to flip 
@@ -1048,60 +1153,8 @@ init_opengl() {
     }
     #endif
     
-    {
-        Vertex_Mesh *mesh = &OpenGL.cube_mesh;
-        glGenBuffers(countof(mesh->buffers), &mesh->buffers[0]);
-        
-        //FRONT: 13   BACK: 57
-        //       02         46
-        
-        Vertex3 vertices[] = {
-            {{-0.5f, -0.5f, +0.5f}, {0, 0}}, //0 front, bot left
-            {{-0.5f, +0.5f, +0.5f}, {0, 1}}, //1 front, top left
-            {{+0.5f, -0.5f, +0.5f}, {1, 0}}, //2 front, bot right
-            {{+0.5f, +0.5f, +0.5f}, {1, 1}}, //3 front, top right
-            
-            {{-0.5f, -0.5f, -0.5f}, {0, 0}}, //4 back, bot left
-            {{-0.5f, +0.5f, -0.5f}, {0, 1}}, //5 back, top left
-            {{+0.5f, -0.5f, -0.5f}, {1, 0}}, //6 back, bot right
-            {{+0.5f, +0.5f, -0.5f}, {1, 1}}, //7 back, top right
-        };
-        u32 indices[] = { //can we use a smaller size here?
-            0, 2, 1, //front
-            1, 2, 3,
-            
-            1, 3, 5, //top
-            5, 3, 7,
-            
-            6, 4, 7, //back
-            7, 4, 5,
-            
-            4, 6, 0, //bottom
-            0, 6, 2,
-            
-            2, 6, 3, //right
-            3, 6, 7,
-            
-            4, 0, 5, //left
-            5, 0, 1,
-            
-        };
-        
-        mesh->vertex_count = countof(vertices);
-        mesh->index_count  = countof(indices);
-        glBindBuffer(GL_ARRAY_BUFFER, mesh->vbo);
-        glBufferData(GL_ARRAY_BUFFER, sizeof(vertices), vertices, GL_STATIC_DRAW); 
-        glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo);
-        glBufferData(GL_ELEMENT_ARRAY_BUFFER, sizeof(indices), indices, GL_STATIC_DRAW); 
-        
-        //glGenBuffers(1, &OpenGL.ibo);
-        //glBindBuffer(GL_ARRAY_BUFFER, OpenGL.ibo);
-        //glBufferData(GL_ARRAY_BUFFER, MAX_INSTANCE_BUFFER_SIZE, 0, GL_DYNAMIC_DRAW);
-        
-        //glGenBuffers(1, &OpenGL.ubo);
-        //glBindBuffer(GL_UNIFORM_BUFFER, OpenGL.ubo);
-        //glBufferData(GL_UNIFORM_BUFFER, sizeof(UBO_Camera), 0, GL_DYNAMIC_DRAW);
-    }
+    load_simple_meshes_vbo_and_ebo();
+    
     
     //TODO log error output
     OpenGL.circle_shader_2d.compile_shader();
@@ -1265,23 +1318,16 @@ draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
     flush_errors();
     
     glCullFace(GL_BACK);
-    
     Simple_Shader_3D *shader = &OpenGL.simple_shader_3d;
     assert (shader->compiled);
     glUseProgram(shader->pid);
     
-    Vertex_Mesh *mesh = &OpenGL.cube_mesh;
-    glBindBuffer(GL_ARRAY_BUFFER,         mesh->vbo);
-    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo); //for glDrawElementsInstanced
+    glBindBuffer(GL_ARRAY_BUFFER,         OpenGL.mesh_vbo);
+    glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, OpenGL.mesh_ebo); //for glDrawElementsInstanced
     shader->enable_vertex_attributes(); //NOTE buffers must be bound before
     
-    
-    
-    
-    //glUniform2i(shader->u_viewport_dim, viewport_dim.x, viewport_dim.y);
     Matrix4x4 lookat = lookat4x4(rcx->cam_pos, {0, 0, 1}, {0, 1, 0});
     
-    #if 1
     f32 np = 0.1f;  //near plane
     f32 fp = 10.0f; //far plane
     
@@ -1298,19 +1344,8 @@ draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
     proj.e33 = (fp + np)  / (fp - np);
     proj.e34 = (-2*fp*np) / (fp - np);
     proj.e43 = 1;
-    #endif
     
-    Matrix4x4 m = multiply(&proj, &lookat);
-    //Matrix4x4 m= lookat;
-    
-    //f32 x_fov = 90;
-    //Matrix3x3 rot = identity3x3();
-    //static f32 theta = 0;
-    //theta += 0.01f;
-    //rot.x_basis = {cos(theta), 0, sin(theta)};
-    //rot.z_basis = {sin(theta), 0, cos(theta)};
-    
-    glUniformMatrix4fv(shader->u_xform, 1, GL_FALSE, m.e);
+    Matrix4x4 world_to_project = multiply(&proj, &lookat);
     
     if (shader->u_near != -1) {
         glUniform1f(shader->u_near, np);
@@ -1319,12 +1354,33 @@ draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
         glUniform1f(shader->u_far, fp);
     }
     
+    for (int i = 0; i < rcx->model_count; i += 1) {
+        Model *model = rcx->models + i;    
+        Vertex_Mesh *mesh = OpenGL.meshes + model->mesh_type;
+        assert (mesh->vertex_count > 0);
+        
+        Matrix4x4 xform = identity4x4();
+        xform.x_basis.xyz = model->x_basis;
+        xform.y_basis.xyz = model->y_basis;
+        xform.z_basis.xyz = model->z_basis;
+        
+        //translation
+        xform.e14 = model->pos.x;
+        xform.e24 = model->pos.y;
+        xform.e34 = model->pos.z;
+        
+        Matrix4x4 m = multiply(&world_to_project, &xform);
+        glUniformMatrix4fv(shader->u_xform, 1, GL_FALSE, m.e);
+        
+        Vector4 color = unpack_v4(model->color);
+        glUniform4f(shader->u_color, color.r, color.g, color.b, color.a); 
+        
+        u32 indices_byte_offset = mesh->first_index * sizeof(u32);
+        glDrawElements(GL_TRIANGLES, mesh->index_count, GL_UNSIGNED_INT, (GLvoid *)(u64)indices_byte_offset);
+    }
     
-    //glUniform3f(shader->u_cam_pos, cam_pos.x, cam_pos.y, cam_pos.z);
-    glDrawElements(GL_TRIANGLES, 36, GL_UNSIGNED_INT, 0);
     shader->disable_vertex_attributes();
     glUseProgram(0);
-    
     check_for_errors();
 }
 
@@ -1355,8 +1411,8 @@ render_opengl(Platform *platform, Render_Context *rcx) {
     glDepthFunc(GL_LEQUAL);
     
     draw_3d_cubes(rcx, viewport_dim);
-    draw_2d_quads(rcx, viewport_dim);
-    draw_2d_circles(rcx, viewport_dim);
+    //draw_2d_quads(rcx, viewport_dim);
+    //draw_2d_circles(rcx, viewport_dim);
     
     
     if (!draw_directly_into_backbuffer) {

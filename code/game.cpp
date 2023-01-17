@@ -60,6 +60,12 @@ static Vector4 make_random_color_v4(u32 *seed) {
 
 void update_game(Platform *platform) {
     
+    
+    static f32 angle_t = 0.1f;
+    Quaternion rot = quaternion_axis_angle_t(V3(0,0,1), angle_t);
+    angle_t += 0.004f;
+    draw_cube(V3(0,0,3), 1, 1, 1, rot, V4(1,1,0,1));
+    
     draw_quad(V2(800, 800), 400, 400, V4(1,1,1,1));
     
     GJK_Result gjk = gjk_get_distance_apart(g_shapes[0], g_shapes[1]);
