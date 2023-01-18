@@ -185,8 +185,7 @@ acos(f32 ratio)
 }
 
 internal f32
-asin(f32 ratio)
-{
+asin(f32 ratio) {
     m128 lane = _mm_asin_ps(_mm_set_ss(ratio));
     f32 result = _mm_cvtss_f32(lane);
     return result;

@@ -79,6 +79,9 @@ void update_game(Platform *platform) {
     angle_t += 0.004f;
     draw_cube(V3(0,0,0), .5f, .5f, .5f, rot, V4(1,1,0,1));
     
+    
+    draw_line(V3(1,0,1), V3(3,0,1), 0.1f, V4(1,0,0,1));
+    
     draw_quad(V2(800, 800), 400, 400, V4(1,1,1,1));
     
     GJK_Result gjk = gjk_get_distance_apart(g_shapes[0], g_shapes[1]);

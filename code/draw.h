@@ -95,14 +95,18 @@ enum Vertex_Mesh_Type : u32 {
     MESH_COUNT,
 };
 
+struct Render_Basis {
+    Vector3 x;
+    Vector3 y;
+    Vector3 z;
+};
+
 constexpr s32 MAX_MODEL_COUNT = 128;
 struct Model {
     Vertex_Mesh_Type mesh_type;
     //this is basically a 3x3 xform matrix
     Vector3 pos;
-    Vector3 x_basis;
-    Vector3 y_basis;
-    Vector3 z_basis;
+    Render_Basis basis;
     Color color;
 };
 
@@ -196,9 +200,9 @@ make_unit_model(Vertex_Mesh_Type mesh, Vector3 pos) {
     Model *model = rcx->models + rcx->model_count++;
     model->pos       = pos;
     model->mesh_type = mesh;
-    model->x_basis = V3(1, 0, 0);
-    model->y_basis = V3(0, 1, 0);
-    model->z_basis = V3(0, 0, 1);
+    model->basis.x = V3(1, 0, 0);
+    model->basis.y = V3(0, 1, 0);
+    model->basis.z = V3(0, 0, 1);
     model->color = {0xff, 0xff, 0xff, 0xff};
     return model;
 }
@@ -207,9 +211,9 @@ static void
 draw_cube(Vector3 pos, f32 w, f32 h, f32 d, Vector4 color = V4(1,1,1,1)) {
     Model *model = make_unit_model(MESH_CUBE, pos);
     if (model) {
-        model->x_basis *= w;
-        model->y_basis *= h;
-        model->z_basis *= d;    
+        model->basis.x *= w;
+        model->basis.y *= h;
+        model->basis.z *= d;    
         model->color = pack_color(color);
     }
 }
@@ -221,28 +225,37 @@ draw_cube(Vector3 pos, f32 w, f32 h, f32 d, Quaternion q, Vector4 color = V4(1,1
     if (model) {
         
         #if 1
-        model->x_basis.x = 1 - 2*(q.y*q.y + q.z*q.z);
-        model->x_basis.y = 2*(q.x*q.y + q.z*q.w);
-        model->x_basis.z = 2*(q.x*q.z - q.y*q.w);
+        model->basis.x.x = 1 - 2*(q.y*q.y + q.z*q.z);
+        model->basis.x.y = 2*(q.x*q.y + q.z*q.w);
+        model->basis.x.z = 2*(q.x*q.z - q.y*q.w);
         
-        model->y_basis.x = 2*(q.x*q.y - q.z*q.w);
-        model->y_basis.y = 1 - 2*(q.x*q.x + q.z*q.z);
-        model->y_basis.z = 2*(q.y*q.z + q.x*q.w);
+        model->basis.y.x = 2*(q.x*q.y - q.z*q.w);
+        model->basis.y.y = 1 - 2*(q.x*q.x + q.z*q.z);
+        model->basis.y.z = 2*(q.y*q.z + q.x*q.w);
         
-        model->z_basis.x = 2*(q.x*q.z + q.y*q.w);
-        model->z_basis.y = 2*(q.y*q.z - q.x*q.w);
-        model->z_basis.z = 1 - 2*(q.x*q.x + q.y*q.y);
+        model->basis.z.x = 2*(q.x*q.z + q.y*q.w);
+        model->basis.z.y = 2*(q.y*q.z - q.x*q.w);
+        model->basis.z.z = 1 - 2*(q.x*q.x + q.y*q.y);
         #else
         //does the same thing but seems like with more computations
-        model->x_basis = rotate(q, model->x_basis);
-        model->y_basis = rotate(q, model->y_basis);
-        model->z_basis = rotate(q, model->z_basis);
+        model->basis.x = rotate(q, model->basis.x);
+        model->basis.y = rotate(q, model->basis.y);
+        model->basis.z = rotate(q, model->basis.z);
         #endif
        
-        model->x_basis *= w;
-        model->y_basis *= h;
-        model->z_basis *= d;
+        model->basis.x *= w;
+        model->basis.y *= h;
+        model->basis.z *= d;
         
+        model->color = pack_color(color);
+    }
+}
+
+static void
+draw_cube(Vector3 pos, Render_Basis basis, Vector4 color = V4(1,1,1,1)) {
+    Model *model = make_unit_model(MESH_CUBE, pos);
+    if (model) {
+        model->basis = basis;
         model->color = pack_color(color);
     }
 }
@@ -260,6 +273,37 @@ draw_circle(Vector2 pos, f32 outer_radius, Vector4 col, f32 inner_radius = 0) {
     cir->inner_r = inner_radius;
     cir->outer_r = outer_radius;
     cir->color = pack_color(col);
+}
+
+
+static void
+draw_line(Vector3 l1, Vector3 l2, f32 thickness, Vector4 col) {
+    //TODO there should be a better way to do this that wouldn't require us to 
+    //do a second cross product if the first fails....
+    //if we pass in like a rotation amount, couldn't we find a perp vector on the plane
+    //made by segment_dir (we would have to solve that system of linear equations)...
+    Vector3 segment = l2 - l1;
+    f32 segment_length = norm(segment);
+    if (segment_length < 0.0001f) return;
+    
+    Vector3 segment_dir = segment / segment_length;
+    Vector3 perp1 = cross(segment_dir, V3(1,0,0));
+    if (normsq(perp1) < 0.0001f) {
+        perp1 = cross(segment_dir, V3(0,1,0));
+    }
+    assert (normsq(perp1) >= 0.0001f);
+    
+    Render_Basis basis;
+    basis.z = segment;
+    basis.x = perp1;
+    basis.y = cross(segment_dir, perp1);
+    
+    basis.x *= thickness;
+    basis.y *= thickness;
+    
+    Vector3 pos = lerp(l1, l2, 0.5f);
+    draw_cube(pos, basis, col);
+    
 }
 
 static void

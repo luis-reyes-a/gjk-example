@@ -301,13 +301,23 @@ internal void
 normalize(Vector2 *a) { *a = normalize(*a); }
 
 internal Vector2
-noz(Vector2 a, f32 threshold = 0.0001f)
-{
+noz(Vector2 a, f32 threshold = 0.0001f) {
     assert (threshold > 0);
     f32 length_squared = normsq(a);
     if (length_squared > SQUARED(threshold))
         return a / sqroot(length_squared);
     else return {};
+}
+
+internal boolint
+will_normalize(Vector2 *v, f32 threshold = 0.0001f) {
+    assert (threshold > 0);
+    f32 length_squared = normsq(*v);
+    if (length_squared > SQUARED(threshold)) {
+        *v /= sqroot(length_squared);
+        return true;
+    }
+    return false;
 }
 
 internal void
@@ -601,6 +611,16 @@ normsq(Vector3 a) {
     return a.x*a.x + a.y*a.y + a.z*a.z; 
 }
 
+internal f32
+norm(Vector3 v) {
+    return sqroot(v.x*v.x + v.y*v.y + v.z*v.z);
+}
+
+internal Vector3
+lerp(Vector3 a, Vector3 b, f32 t) {
+    return a + t*(b-a);
+}
+
 internal Vector3
 normalize(Vector3 a) {
     f32 length_squared = normsq(a);
@@ -655,8 +675,9 @@ static Vector4
 operator*(f32 s, Vector4 a) {	return v4(a.x*s, a.y*s, a.z*s, a.w*s);	}
 
 internal Vector4
-lerp(Vector4 a, Vector4 b, f32 t)
-{   return a + (b - a)*t;   } 
+lerp(Vector4 a, Vector4 b, f32 t) {   
+    return a + (b - a)*t;   
+} 
 
 //NOTE column major
 union Matrix3x3 {
@@ -873,7 +894,8 @@ constexpr Quaternion QUATERNION(f32 x, f32 y, f32 z, f32 w) {
 }
 
 //NOTE this assumes axis is already normalized
-static Quaternion quaternion_axis_angle_t(Vector3 axis, f32 angle_t) {
+static Quaternion 
+quaternion_axis_angle_t(Vector3 axis, f32 angle_t) {
     Quaternion q;
     f32 half_angle_t = 0.5f*angle_t;
     f32 sin_of_angle = sin_t(half_angle_t); 
@@ -883,6 +905,22 @@ static Quaternion quaternion_axis_angle_t(Vector3 axis, f32 angle_t) {
     q.w = cos_t(half_angle_t);
     return q;
 }
+
+//TODO there should be a more computationally effecient way of doing this
+//calling arcsin seems uneccessary...
+#if 0
+static Quaternion
+quaternion_to_dir(Vector3 dir1, Vector3 dir2) {
+    Quaternion q = {{0,0,0}, 1.0f};
+    Vector3 d1_cross_d2 = cross(d1, d2);
+    if (will_normalize(&d1_cross_d2)) {
+        f32 sin_theta = norm(d1_cross_d2);
+        f32 theta = asin(sin_theta);   
+        q = quaternion_axis_angle_t(d1_cross_d2, theta/TAU);
+    }
+    return q;   
+}
+#endif
 
 static Vector3
 rotate(Quaternion q, Vector3 v) {

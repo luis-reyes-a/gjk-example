@@ -1369,9 +1369,9 @@ draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
         assert (mesh->vertex_count > 0);
         
         Matrix4x4 xform = identity4x4();
-        xform.x_basis.xyz = model->x_basis;
-        xform.y_basis.xyz = model->y_basis;
-        xform.z_basis.xyz = model->z_basis;
+        xform.x_basis.xyz = model->basis.x;
+        xform.y_basis.xyz = model->basis.y;
+        xform.z_basis.xyz = model->basis.z;
         
         //translation
         xform.e14 = model->pos.x;
