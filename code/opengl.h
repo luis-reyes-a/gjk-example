@@ -1420,8 +1420,8 @@ render_opengl(Platform *platform, Render_Context *rcx) {
     glDepthFunc(GL_LEQUAL);
     
     draw_3d_cubes(rcx, viewport_dim);
-    //draw_2d_quads(rcx, viewport_dim);
-    //draw_2d_circles(rcx, viewport_dim);
+    draw_2d_quads(rcx, viewport_dim);
+    draw_2d_circles(rcx, viewport_dim);
     
     
     if (!draw_directly_into_backbuffer) {

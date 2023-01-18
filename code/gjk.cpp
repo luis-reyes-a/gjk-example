@@ -415,6 +415,10 @@ gjk_get_distance_apart(Shape s1, Shape s2) {
             if (edge10.origin_between_endpoints) { //means we should run EPA because there may be closer simplex point samples
                 result = {};
                 simplex_contains_origin = 1; //run EPA
+                
+                //NOTE epa_get_penetration_depth expects a full 3-simplex
+                solver.search_dir = perp(solver.simplex[0]);
+                solver.find_next_point();
             } else {
                 //NOTE here we assume that closest_delta dir is beyond new point...
                 //TODO we may be more exact for extreme, elongated shapes if we try to find a new search dir anyways

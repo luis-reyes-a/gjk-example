@@ -134,7 +134,7 @@ struct Push_Size_Args {
 };
 
 //NOTE people are required to define this function, it's basically a first class citizen for us
-internal Memory_Arena *get_temp_memory();
+inline Memory_Arena *get_temp_memory();
 
 
 internal void *push_size_internal(Memory_Arena *arena, u32 size, u32 default_alignment, Push_Size_Args args = {});

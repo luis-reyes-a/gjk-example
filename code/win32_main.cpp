@@ -27,7 +27,7 @@ inline u64 get_frame_index() {
 //TODO how does this work with dll? Is having "static thread_local Memory_Arena *Temporary_Memory_Arena" the correct way?
 static thread_local Memory_Arena Temporary_Memory_Arena;
 
-internal Memory_Arena *
+inline Memory_Arena *
 get_temp_memory() {
     return &Temporary_Memory_Arena;
 }
