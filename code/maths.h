@@ -542,6 +542,26 @@ V3(f32 x, f32 y, f32 z) {
 }
 
 static Vector3
+operator+(Vector3 a, Vector3 b) {	
+    return {a.x + b.x, a.y + b.y, a.z + b.z};
+}
+
+static void
+operator+=(Vector3 &a, Vector3 b) {	
+    a = a + b;
+}
+
+static Vector3
+operator-(Vector3 a, Vector3 b) {	
+    return {a.x - b.x, a.y - b.y, a.z - b.z};
+}
+
+static void
+operator-=(Vector3 &a, Vector3 b) {	
+    a = a - b;
+}
+
+static Vector3
 operator/(Vector3 a, f32 den) {	
     assert (den != 0); 
     return v3(a.x / den, a.y / den, a.z / den);	
@@ -746,6 +766,19 @@ static Matrix4x4 identity4x4() {
     return m;
 }
 
+inline Matrix4x4 
+make4x4(f32 e11, f32 e12, f32 e13, f32 e14,
+        f32 e21, f32 e22, f32 e23, f32 e24,
+        f32 e31, f32 e32, f32 e33, f32 e34,
+        f32 e41, f32 e42, f32 e43, f32 e44) {
+    Matrix4x4 m;
+    m.e11 = e11; m.e21 = e21; m.e31 = e31; m.e41 = e41;
+    m.e12 = e12; m.e22 = e22; m.e32 = e32; m.e42 = e42;
+    m.e13 = e13; m.e23 = e23; m.e33 = e33; m.e43 = e43;
+    m.e14 = e14; m.e24 = e24; m.e34 = e34; m.e44 = e44;
+    return m;
+}
+
 static void transpose(Matrix4x4 *m) {
     SWAP(m->e12, m->e21);
     SWAP(m->e13, m->e31);
@@ -774,6 +807,8 @@ static Matrix4x4 multiply(Matrix4x4 *m, Matrix4x4 *columns) {
     return result;
 }
 
+
+
 static Matrix4x4 lookat4x4(Vector3 pos, Vector3 dir, Vector3 up) {
     Vector3 basis_z = normalize(dir);
     Vector3 basis_y = normalize(up);
@@ -792,6 +827,8 @@ static Matrix4x4 lookat4x4(Vector3 pos, Vector3 dir, Vector3 up) {
     return lookat;
 }
 
+
+
 union Quaternion {
     struct {
         Vector3 xyz;
@@ -802,6 +839,28 @@ union Quaternion {
         f32 x, y, z, w;
     };
 };
+
+#if 0
+static Quaternion 
+operator*(Quaternion q1, Quaternion q2) {
+    Quaternion result;
+    result.x =  q1.x * q2.w + q1.y * q2.z - q1.z * q2.y + q1.w * q2.x;
+    result.y = -q1.x * q2.z + q1.y * q2.w + q1.z * q2.x + q1.w * q2.y;
+    result.z =  q1.x * q2.y - q1.y * q2.x + q1.z * q2.w + q1.w * q2.z;
+    result.w = -q1.x * q2.x - q1.y * q2.y - q1.z * q2.z + q1.w * q2.w;
+    return result;
+}
+#else
+static Quaternion 
+operator*(Quaternion q1, Quaternion q2) {
+    Quaternion result;
+    result.x = q1.w * q2.x + q1.x * q2.w + q1.y * q2.z - q1.z * q2.y;
+    result.y = q1.w * q2.y - q1.x * q2.z + q1.y * q2.w + q1.z * q2.x;
+    result.z = q1.w * q2.z + q1.x * q2.y - q1.y * q2.x + q1.z * q2.w;
+    result.w = q1.w * q2.w - q1.x * q2.x - q1.y * q2.y - q1.z * q2.z;
+    return result;
+}
+#endif
 
 inline Quaternion quaternion(f32 x, f32 y, f32 z, f32 w) {
     Quaternion q = {x, y, z, w};
@@ -816,13 +875,59 @@ constexpr Quaternion QUATERNION(f32 x, f32 y, f32 z, f32 w) {
 //NOTE this assumes axis is already normalized
 static Quaternion quaternion_axis_angle_t(Vector3 axis, f32 angle_t) {
     Quaternion q;
-    f32 half_angle_r = (0.5f*angle_t)*TAU;
-    f32 sin_of_angle = sin(half_angle_r); 
+    f32 half_angle_t = 0.5f*angle_t;
+    f32 sin_of_angle = sin_t(half_angle_t); 
     q.x = axis.x*sin_of_angle;
     q.y = axis.y*sin_of_angle;
     q.z = axis.z*sin_of_angle;
-    q.w = cos(half_angle_r);
+    q.w = cos_t(half_angle_t);
     return q;
+}
+
+static Vector3
+rotate(Quaternion q, Vector3 v) {
+    float tX = 2 * (q.y * v.z - q.z * v.y);
+    float tY = 2 * (q.z * v.x - q.x * v.z);
+    float tZ = 2 * (q.x * v.y - q.y * v.x);
+    
+    Vector3 result;
+    result.x = v.x + q.w * tX + (q.y * tZ - q.z * tY);
+    result.y = v.y + q.w * tY + (q.z * tX - q.x * tZ);
+    result.z = v.z + q.w * tZ + (q.x * tY - q.y * tX);
+    return result;
+}
+
+static Matrix3x3
+to_matrix3x3(Quaternion q) {
+    Matrix3x3 m;
+    
+    float twoX = 2 * q.x;
+    float twoY = 2 * q.y;
+    float twoZ = 2 * q.z;
+    float twoXX = twoX * q.x;
+    float twoYY = twoY * q.y;
+    float twoZZ = twoZ * q.z;
+    float twoXY = twoX * q.y;
+    float twoXZ = twoX * q.z;
+    float twoYZ = twoY * q.z;
+    float twoXW = twoX * q.w;
+    float twoYW = twoY * q.w;
+    float twoZW = twoZ * q.w;
+    
+    // according to Watt, p.489
+    m.e11 = 1 - (twoYY + twoZZ);
+    m.e12 = twoXY - twoZW;
+    m.e13 = twoYW + twoXZ;
+    
+    m.e21 = twoXY + twoZW;
+    m.e22 = 1 - (twoXX + twoZZ);
+    m.e23 = twoYZ - twoXW;
+    
+    m.e31 = twoXZ - twoYW;
+    m.e32 = twoXW + twoYZ;
+    m.e33 = 1 - (twoXX + twoYY);
+    
+    return m;
 }
 
 

@@ -110,7 +110,11 @@ struct Model {
 struct Render_Context {
     Vector2i window_dim; //does not include border and title stuff. Just dimensions of window we can render into
     Camera2D screen_cam;
+    
     Vector3 cam_pos;
+    //for camera orientation, we compute yaw first, then pitch
+    f32 cam_yaw_t; 
+    f32 cam_pitch_t;
     f32 xfov_t; //in degrees
     
     Rasterized_Font ui_font;
@@ -129,6 +133,26 @@ struct Render_Context {
 };
 
 static Render_Context *get_render_context();
+
+static void
+get_camera_local_axis(Vector3 *cam_x, Vector3 *cam_y, Vector3 *cam_z) {
+    Render_Context *rcx = get_render_context();
+    f32 cos_yaw = cos_t(rcx->cam_yaw_t);
+    f32 sin_yaw = sin_t(rcx->cam_yaw_t);
+    
+    //NOTE v3(cos_yaw, -sin_yaw) is the view dir
+    //we negate view_dir to get the z axis going in positive direction
+    
+    *cam_z = v3(-cos_yaw, 0, sin_yaw); //on xz plane for now (no pitch rotation added yet)
+    *cam_x = v3(sin_yaw, 0, cos_yaw);
+    
+    Quaternion z_rotate = quaternion_axis_angle_t(*cam_x, rcx->cam_pitch_t);
+    *cam_z = rotate(z_rotate, *cam_z);
+    
+    *cam_y = cross(*cam_z, *cam_x);
+}
+
+
 
 static void
 render_context_begin_frame(Render_Context *rcx, s32 window_w, s32 window_h, Vector2i mouse_pos) {
@@ -195,17 +219,25 @@ static void
 draw_cube(Vector3 pos, f32 w, f32 h, f32 d, Quaternion q, Vector4 color = V4(1,1,1,1)) {
     Model *model = make_unit_model(MESH_CUBE, pos);
     if (model) {
-        model->x_basis.x = 1 - 2*q.y*q.y - 2*q.z*q.z;
-        model->x_basis.y = 2*q.x*q.y     + 2*q.z*q.w;
-        model->x_basis.z = 2*q.x*q.z     - 2*q.y*q.w;
         
-        model->y_basis.x = 2*q.x*q.y     - 2*q.z*q.w;
-        model->y_basis.y = 1 - 2*q.x*q.x - 2*q.z*q.z;
-        model->y_basis.z = 2*q.y*q.z     + 2*q.x*q.w;
+        #if 1
+        model->x_basis.x = 1 - 2*(q.y*q.y + q.z*q.z);
+        model->x_basis.y = 2*(q.x*q.y + q.z*q.w);
+        model->x_basis.z = 2*(q.x*q.z - q.y*q.w);
         
-        model->z_basis.x = 2*q.x*q.z     + 2*q.y*q.w;
-        model->z_basis.y = 2*q.y*q.z     - 2*q.x*q.w;
-        model->z_basis.z = 1 - 2*q.x*q.x - 2*q.y*q.y;
+        model->y_basis.x = 2*(q.x*q.y - q.z*q.w);
+        model->y_basis.y = 1 - 2*(q.x*q.x + q.z*q.z);
+        model->y_basis.z = 2*(q.y*q.z + q.x*q.w);
+        
+        model->z_basis.x = 2*(q.x*q.z + q.y*q.w);
+        model->z_basis.y = 2*(q.y*q.z - q.x*q.w);
+        model->z_basis.z = 1 - 2*(q.x*q.x + q.y*q.y);
+        #else
+        //does the same thing but seems like with more computations
+        model->x_basis = rotate(q, model->x_basis);
+        model->y_basis = rotate(q, model->y_basis);
+        model->z_basis = rotate(q, model->z_basis);
+        #endif
        
         model->x_basis *= w;
         model->y_basis *= h;

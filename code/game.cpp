@@ -15,7 +15,20 @@ static Memory_Arena *get_temp_memory(){
 
 void init_game(Platform *platform) {
     PLATFORM = platform;
-    platform->rcx.xfov_t = 80.0f / 360.0f;
+    
+    Render_Context *rcx = &platform->rcx;
+    rcx->cam_pos = {0, 0, 0};
+    rcx->xfov_t = 80.0f / 360.0f;
+    
+    
+    //breakpoint;
+    Vector3 v = {1, 0, 0};
+    Quaternion q = quaternion_axis_angle_t(V3(0,1,0), 0.25f);
+    v = rotate(q, v);
+    v = rotate(q, v);
+    v = rotate(q, v);
+    v = rotate(q, v);
+    //breakpoint;
 }
 static Render_Context *get_render_context() {
     return &PLATFORM->rcx;
@@ -61,10 +74,10 @@ static Vector4 make_random_color_v4(u32 *seed) {
 void update_game(Platform *platform) {
     
     
-    static f32 angle_t = 0.1f;
-    Quaternion rot = quaternion_axis_angle_t(V3(0,0,1), angle_t);
+    static f32 angle_t = 0;
+    Quaternion rot = quaternion_axis_angle_t(V3(1,0,0), angle_t);
     angle_t += 0.004f;
-    draw_cube(V3(0,0,3), 1, 1, 1, rot, V4(1,1,0,1));
+    draw_cube(V3(0,0,0), .5f, .5f, .5f, rot, V4(1,1,0,1));
     
     draw_quad(V2(800, 800), 400, 400, V4(1,1,1,1));
     
@@ -111,61 +124,79 @@ void update_game(Platform *platform) {
         line_pos.y -= lineheight;
     }
     
+    
+    s32 num_axis_cubes = 20;
+    f32 axis_cube_size = 0.25f;
+    for (int i = 0; i < num_axis_cubes; i += 1) {
+        draw_cube(v3((f32)i+1, 0, 0), axis_cube_size, axis_cube_size, axis_cube_size, V4(1,0,0,1));
+        draw_cube(v3(0, (f32)i+1, 0), axis_cube_size, axis_cube_size, axis_cube_size, V4(0,1,0,1));
+        draw_cube(v3(0, 0, (f32)i+1), axis_cube_size, axis_cube_size, axis_cube_size, V4(0,0,1,1));
+    }
+    
 }
 
 void handle_input_game(User_Input *input) {
     Render_Context *rcx = &get_platform()->rcx;
-    f32 cam_speed = 0.1f;
+    f32 cam_move_speed = 0.1f;
+    f32 cam_rot_speed = 0.003f;
     for_unhandled_input_event (input, INPUT_FOCUS_WINDOW) {
         if (event->type == INPUT_EVENT_KEY) {
             Input_Event_Key *key = (Input_Event_Key *)event;
             switch (key->id) {
+            
+            case KEY_Q: 
+            case KEY_E: {
+                if (key->is_down) {
+                    mark_handled(input, event);
+                    f32 sign = (key->id==KEY_E) ? 1.0f : -1.0f;
+                    rcx->cam_pos.y += sign*cam_move_speed; 
+                }
+            } break;
+            
+            case KEY_W: 
+            case KEY_S: {
+                Vector3 cam_x, cam_y, cam_z;
+                get_camera_local_axis(&cam_x, &cam_y, &cam_z);
+                if (key->is_down) {
+                    mark_handled(input, event);
+                    f32 sign = (key->id==KEY_W) ? 1.0f : -1.0f;
+                    rcx->cam_pos -= cam_z*cam_move_speed*sign; 
+                }
+            } break;
+            
+            case KEY_A: 
+            case KEY_D: {
+                Vector3 cam_x, cam_y, cam_z;
+                get_camera_local_axis(&cam_x, &cam_y, &cam_z);
+                if (key->is_down) {
+                    mark_handled(input, event);
+                    f32 sign = (key->id==KEY_D) ? 1.0f : -1.0f;
+                    rcx->cam_pos += cam_x*cam_move_speed*sign; 
+                }
+            } break;
+            
+            case KEY_UP: 
+            case KEY_DOWN: {
+                if (key->is_down) {
+                    mark_handled(input, event);
+                    f32 sign = (key->id==KEY_UP) ? 1.0f : -1.0f;
+                    rcx->cam_pitch_t += sign*cam_rot_speed;
+                }
+            } break;
+            
+            case KEY_LEFT:
+            case KEY_RIGHT: {
+                if (key->is_down) {
+                    mark_handled(input, event);
+                    f32 sign = (key->id==KEY_RIGHT) ? 1.0f : -1.0f;
+                    rcx->cam_yaw_t += sign*cam_rot_speed;
+                }
+            } break;
+            
             case KEY_F4: {
                 if (key->on_press && has_modifier(input, KEY_ALT)) {
                     mark_handled(input, event);
                     input->request_quit_program = true;
-                }
-            } break;
-            
-            case KEY_W: {
-                if (key->is_down) {
-                    mark_handled(input, event);
-                    rcx->cam_pos.y += cam_speed; 
-                }
-            } break;
-            
-            case KEY_S: {
-                if (key->is_down) {
-                    mark_handled(input, event);
-                    rcx->cam_pos.y -= cam_speed; 
-                }
-            } break;
-            
-            case KEY_D: {
-                if (key->is_down) {
-                    mark_handled(input, event);
-                    rcx->cam_pos.x += cam_speed; 
-                }
-            } break;
-            
-            case KEY_A: {
-                if (key->is_down) {
-                    mark_handled(input, event);
-                    rcx->cam_pos.x -= cam_speed; 
-                }
-            } break;
-            
-            case KEY_UP: {
-                if (key->is_down) {
-                    mark_handled(input, event);
-                    rcx->cam_pos.z += cam_speed; 
-                }
-            } break;
-            
-            case KEY_DOWN: {
-                if (key->is_down) {
-                    mark_handled(input, event);
-                    rcx->cam_pos.z -= cam_speed; 
                 }
             } break;
             

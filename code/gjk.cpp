@@ -3,12 +3,12 @@
 #define GJK_MAX_ITERATION_COUNT 8
 //NOTE this basically controls a how close a vector/dist must be for us to consider it zero 
 #define GJK_ZERO_EPSILON 0.001f
-#define GJK_2D_DEBUG_DRAW_LINES false
-#define EPA_2D_DEBUG_DRAW_LINES true
+#define GJK_2D_DEBUG_DRAW_LINES 0
+#define EPA_2D_DEBUG_DRAW_LINES 0
 
 //uncomment this to turn off prints
 #pragma push_macro("debug_printf")
-//#define debug_printf(...) 
+#define debug_printf(...) 
 
 enum Shape_Type {
     SHAPE_CIRCLE,

@@ -602,7 +602,7 @@ struct Simple_Shader_3D {
      out V2F_STRUCT v2f;
      void main () { 
          gl_Position = u_xform*vec4(vert_pos, 1);
-
+         //gl_Position = vec4(vert_pos, 1)*u_xform;
          v2f.uv = vert_uv;
          v2f.color = u_color;
      }
@@ -619,8 +619,10 @@ struct Simple_Shader_3D {
      }
 
      out vec4 frag_color;
-     void main () {
+     void main () { 
+         //float tz = linearize_depth(gl_FragCoord.z);
          frag_color = v2f.color;
+         //frag_color.xyz *= tz;
      }
     )___";
     
@@ -1264,12 +1266,6 @@ draw_2d_quads(Render_Context *rcx, Vector2i viewport_dim) {
     assert (shader->compiled);
     glUseProgram(shader->pid);
     
-    //Vertex_Mesh *mesh = &OpenGL.square_mesh;
-    //glBindBuffer(GL_ARRAY_BUFFER,         mesh->vbo);
-    //glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, mesh->ebo); //for glDrawElementsInstanced
-    //shader->enable_vertex_attributes(); //not ARRAY_BUFFER must be bound
-    
-    
     glUniform2i(shader->u_viewport_dim, viewport_dim.x, viewport_dim.y);
     
     Texture_Atlas *atlas = rcx->atlas + TEXTURE_ATLAS_UI_FONT;
@@ -1303,10 +1299,7 @@ draw_2d_quads(Render_Context *rcx, Vector2i viewport_dim) {
     }
     
     
-    //glBindBuffer(GL_ARRAY_BUFFER,         0);
-    //glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, 0); //for glDrawElementsInstanced
     glBindBuffer(GL_UNIFORM_BUFFER, 0); 
-    //shader->disable_vertex_attributes();
     glUseProgram(0);
     
     check_for_errors();
@@ -1317,6 +1310,7 @@ static void
 draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
     flush_errors();
     
+    glEnable(GL_CULL_FACE);  
     glCullFace(GL_BACK);
     Simple_Shader_3D *shader = &OpenGL.simple_shader_3d;
     assert (shader->compiled);
@@ -1326,10 +1320,23 @@ draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, OpenGL.mesh_ebo); //for glDrawElementsInstanced
     shader->enable_vertex_attributes(); //NOTE buffers must be bound before
     
-    Matrix4x4 lookat = lookat4x4(rcx->cam_pos, {0, 0, 1}, {0, 1, 0});
+    Vector3 cam_x, cam_y, cam_z;
+    get_camera_local_axis(&cam_x, &cam_y, &cam_z);
     
-    f32 np = 0.1f;  //near plane
-    f32 fp = 10.0f; //far plane
+    //debug_printf("Cam yaw: %.3f, pitch: %.3f\n", rcx->cam_yaw_t*360, rcx->cam_pitch_t*360);
+    //debug_printf("Cam x: (%.3f, %.3f, %.3f)\n", cam_x.x, cam_x.y, cam_x.z);
+    //debug_printf("Cam y: (%.3f, %.3f, %.3f)\n", cam_y.x, cam_y.y, cam_y.z);
+    //debug_printf("Cam z: (%.3f, %.3f, %.3f)\n", cam_z.x, cam_z.y, cam_z.z);
+    
+    //NOTE each camera axis takes up a row, meaning it will be dotted against income vector to project it onto camera local axis
+    //the 4th column is translation but predotted with camera axis to do translation in view space
+    Matrix4x4 lookat = make4x4(cam_x.x, cam_x.y, cam_x.z, -dot3(cam_x, rcx->cam_pos),
+                               cam_y.x, cam_y.y, cam_y.z, -dot3(cam_y, rcx->cam_pos),
+                               cam_z.x, cam_z.y, cam_z.z, -dot3(cam_z, rcx->cam_pos),
+                                     0,       0,       0,  1);
+    
+    f32 np =  -0.1f; //near plane
+    f32 fp = -25.0f; //far plane
     
     f32 aspect_w_over_h = (f32)viewport_dim.x / (f32)viewport_dim.y;
     
@@ -1341,9 +1348,11 @@ draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
     Matrix4x4 proj = {}; //from view space to
     proj.e11 = (2*np) / np_width;
     proj.e22 = (2*np) / np_height;
-    proj.e33 = (fp + np)  / (fp - np);
-    proj.e34 = (-2*fp*np) / (fp - np);
-    proj.e43 = 1;
+    //NOTE for z going forward into screen (left handed), the denominator would be fp-np
+    proj.e33 = (fp + np)  / (np - fp);     
+    proj.e34 = (-2*fp*np) / (np - fp);
+    //NOTE for z going forward into screen (left handed), this would be positive
+    proj.e43 = -1; //NOTE this puts z in w of vertex for perspective divide
     
     Matrix4x4 world_to_project = multiply(&proj, &lookat);
     
@@ -1402,8 +1411,8 @@ render_opengl(Platform *platform, Render_Context *rcx) {
     }
     
     
-	 
-    glClearDepth(1.0f); //1 is furthest away in right-handed system
+    
+    glClearDepth(1);
     glClearColor(SQUARED(0.5f), SQUARED(0.5f), SQUARED(0.5f), 1);
     glClear(GL_COLOR_BUFFER_BIT|GL_DEPTH_BUFFER_BIT);
     
