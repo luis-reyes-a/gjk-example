@@ -725,4 +725,19 @@ get_furthest_point_generic(Shape shape, Vector2 dir) {
     return result + shape.pos;
 }
 
+//3d stuff
+
+enum Shape_Type_3D {
+    SHAPE_SPHERE,
+    SHAPE_AABB_3D,
+    SHAPE_CUBE,
+};
+
+struct Shape_3D {
+    Shape_Type_3D type;
+    Vector3 pos; //center of shape
+    Vector3 dim; //for circle, x is radius
+    Quaternion orientation; //for cubes
+};
+
 #pragma pop_macro("debug_printf")

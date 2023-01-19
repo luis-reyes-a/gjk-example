@@ -101,7 +101,7 @@ struct Render_Basis {
     Vector3 z;
 };
 
-constexpr s32 MAX_MODEL_COUNT = 128;
+constexpr s32 MAX_MODEL_COUNT = 256;
 struct Model {
     Vertex_Mesh_Type mesh_type;
     //this is basically a 3x3 xform matrix
@@ -115,6 +115,9 @@ struct Render_Context {
     Vector2i window_dim; //does not include border and title stuff. Just dimensions of window we can render into
     Camera2D screen_cam;
     
+    //must be negative as we use right-handed system
+    static constexpr f32 near_plane =  -0.1f; 
+    static constexpr f32 far_plane  = -25.0f; 
     Vector3 cam_pos;
     //for camera orientation, we compute yaw first, then pitch
     f32 cam_yaw_t; 
@@ -138,6 +141,35 @@ struct Render_Context {
 
 static Render_Context *get_render_context();
 
+static f32
+get_window_aspect_ratio() {
+    Render_Context *rcx = get_render_context();
+    if (rcx->window_dim.y > 0) {
+        f32 aspect_w_over_h = (f32)rcx->window_dim.x / (f32)rcx->window_dim.y;
+        return aspect_w_over_h;    
+    }
+    return 0;
+}
+
+static Vector2
+get_near_plane_dim(f32 aspect_w_over_h) {
+    assert (aspect_w_over_h > 0.1f);
+    Render_Context *rcx = get_render_context();
+    f32 np = rcx->near_plane;
+    assert (np < 0);
+    
+    Vector2 dim;
+    dim.x = -2*np*tan_t(rcx->xfov_t/2);
+    dim.y = dim.x / aspect_w_over_h;
+    
+    assert (dim.x > 0);
+    assert (dim.y > 0);
+    return dim;
+}
+
+
+
+
 static void
 get_camera_local_axis(Vector3 *cam_x, Vector3 *cam_y, Vector3 *cam_z) {
     Render_Context *rcx = get_render_context();
@@ -147,8 +179,8 @@ get_camera_local_axis(Vector3 *cam_x, Vector3 *cam_y, Vector3 *cam_z) {
     //NOTE v3(cos_yaw, -sin_yaw) is the view dir
     //we negate view_dir to get the z axis going in positive direction
     
-    *cam_z = v3(-cos_yaw, 0, sin_yaw); //on xz plane for now (no pitch rotation added yet)
-    *cam_x = v3(sin_yaw, 0, cos_yaw);
+    *cam_z = v3(-cos_yaw, 0.0f, sin_yaw); //on xz plane for now (no pitch rotation added yet)
+    *cam_x = v3(sin_yaw,  0.0f, cos_yaw);
     
     Quaternion z_rotate = quaternion_axis_angle_t(*cam_x, rcx->cam_pitch_t);
     *cam_z = rotate(z_rotate, *cam_z);
@@ -294,7 +326,7 @@ draw_line(Vector3 l1, Vector3 l2, f32 thickness, Vector4 col) {
     assert (normsq(perp1) >= 0.0001f);
     
     Render_Basis basis;
-    basis.z = segment;
+    basis.z = segment_dir*(segment_length+thickness);
     basis.x = perp1;
     basis.y = cross(segment_dir, perp1);
     
@@ -304,6 +336,11 @@ draw_line(Vector3 l1, Vector3 l2, f32 thickness, Vector4 col) {
     Vector3 pos = lerp(l1, l2, 0.5f);
     draw_cube(pos, basis, col);
     
+}
+
+static void
+draw_line_dir(Vector3 l1, Vector3 dir, f32 thickness, Vector4 col) {
+    draw_line(l1, l1 + dir, thickness, col);
 }
 
 static void

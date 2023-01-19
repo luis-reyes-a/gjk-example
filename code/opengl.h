@@ -1335,19 +1335,19 @@ draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
                                cam_z.x, cam_z.y, cam_z.z, -dot3(cam_z, rcx->cam_pos),
                                      0,       0,       0,  1);
     
-    f32 np =  -0.1f; //near plane
-    f32 fp = -25.0f; //far plane
+    f32 np = rcx->near_plane;
+    f32 fp = rcx->far_plane;
     
     f32 aspect_w_over_h = (f32)viewport_dim.x / (f32)viewport_dim.y;
     
     clamp(&rcx->xfov_t, 60.0f/360.0f, 120.0f/360.0f);
-    f32 np_width = 2*np*tan_t(rcx->xfov_t/2);
-    f32 np_height = np_width / aspect_w_over_h;
+    
+    Vector2 np_dim = get_near_plane_dim(aspect_w_over_h);
     
     
     Matrix4x4 proj = {}; //from view space to
-    proj.e11 = (2*np) / np_width;
-    proj.e22 = (2*np) / np_height;
+    proj.e11 = (2*np) / -np_dim.x;
+    proj.e22 = (2*np) / -np_dim.y;
     //NOTE for z going forward into screen (left handed), the denominator would be fp-np
     proj.e33 = (fp + np)  / (np - fp);     
     proj.e34 = (-2*fp*np) / (np - fp);

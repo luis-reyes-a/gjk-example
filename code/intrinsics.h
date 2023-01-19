@@ -171,9 +171,10 @@ cos_t(f32 t) {
     return cos(TAU*t);
 }
 
-internal f32
+inline f32
 tan_t(f32 t) {
-    return tan(TAU*t);
+    f32 r = tan(TAU*t); 
+    return r;
 }
 
 internal f32

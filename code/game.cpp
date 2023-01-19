@@ -2,8 +2,8 @@
 #include "gjk.cpp"
 
 enum Game_Mode {
-    GAME_GJK_2D,
     GAME_GJK_3D,
+    GAME_GJK_2D,
     GAME_MODE_COUNT,
 };
 
@@ -11,6 +11,9 @@ struct Game_State {
     Game_Mode mode;
     u32 seed;
     Shape shapes_2d[2];
+    
+    s32 sel_shape;
+    Shape_3D shapes_3d[2];
 };
 
 static Game_State *g_game_state;
@@ -49,6 +52,9 @@ void init_game(Platform *platform) {
     g_game_state->seed = 0xcafebabe;
     g_game_state->shapes_2d[0] = {SHAPE_CIRCLE, V2(821, 403), V2(150, 0)}; 
     g_game_state->shapes_2d[1] = {SHAPE_RECT,   V2(800, 800), V2(600, 600), -1.0f/16.0f};
+    
+    g_game_state->shapes_3d[0] = {SHAPE_AABB_3D, V3(1, 1, 1), V3(1, 1, 1)}; 
+    g_game_state->shapes_3d[1] = {SHAPE_AABB_3D, V3(3, 3, 3), V3(1, 1, 1)};
 }
 static Render_Context *get_render_context() {
     return &g_platform->rcx;
@@ -70,6 +76,40 @@ static void draw(Shape *shape, Vector4 col) {
     }
 }
 
+static void 
+draw(Shape_3D *shape, Vector4 col) {
+    f32 thickness = .02f;
+    switch (shape->type) {
+    case SHAPE_SPHERE: assert (0);
+    case SHAPE_AABB_3D:   {
+        Vector3 dim = shape->dim;
+        Vector3 min = shape->pos - 0.5f*dim;
+        Vector3 max = min + shape->dim;;
+        
+        draw_line_dir(min,                   v3(dim.x,.0f,.0f), thickness, col);
+        draw_line_dir(min,                   v3(.0f,dim.y,.0f), thickness, col); 
+        draw_line_dir(min,                   v3(.0f,.0f,dim.z), thickness, col);
+        
+        draw_line_dir(min+v3(.0f,dim.y,.0f), v3(dim.x,.0f,.0f), thickness, col);
+        draw_line_dir(min+v3(.0f,dim.y,.0f), v3(.0f,.0f,dim.z), thickness, col);
+        
+        draw_line_dir(max,                   v3(-dim.x,.0f,.0f), thickness, col);
+        draw_line_dir(max,                   v3(.0f,-dim.y,.0f), thickness, col); 
+        draw_line_dir(max,                   v3(.0f,.0f,-dim.z), thickness, col);
+        
+        draw_line_dir(max+v3(.0f,-dim.y,.0f), v3(-dim.x,.0f,.0f), thickness, col);
+        draw_line_dir(max+v3(.0f,-dim.y,.0f), v3(.0f,.0f,-dim.z), thickness, col);
+        
+        draw_line_dir(v3(min.x, min.y, max.z), v3(.0f,dim.z,.0f), thickness, col);
+        draw_line_dir(v3(max.x, min.y, min.z), v3(.0f,dim.z,.0f), thickness, col);
+    } break;
+    case SHAPE_CUBE: {
+        
+        
+    } break;
+    }
+}
+
 
 static Vector4 make_random_color_v4(u32 *seed) {
     Color col;
@@ -82,7 +122,6 @@ void update_game(Platform *platform) {
     Game_State *state = get_game_state();
     switch (state->mode) {
     case GAME_GJK_2D: {
-        draw_quad(V2(800, 800), 400, 400, V4(1,1,1,1));
         
         Shape *shape1 = state->shapes_2d + 0;
         Shape *shape2 = state->shapes_2d + 1;
@@ -130,24 +169,36 @@ void update_game(Platform *platform) {
         }    
     } break;
     case GAME_GJK_3D: {
-        static f32 angle_t = 0;
-        Quaternion rot = quaternion_axis_angle_t(V3(1,0,0), angle_t);
-        angle_t += 0.004f;
-        draw_cube(V3(0,0,0), .5f, .5f, .5f, rot, V4(1,1,0,1));
+        //static f32 angle_t = 0;
+        //Quaternion rot = quaternion_axis_angle_t(V3(1,0,0), angle_t);
+        //angle_t += 0.004f;
+        //draw_cube(V3(0,0,0), .5f, .5f, .5f, rot, V4(1,1,0,1));
         
         
-        draw_line(V3(1,0,1), V3(3,0,1), 0.01f, V4(1,0,0,1));
+        //draw_line(V3(1,0,1), V3(3,0,1), 0.01f, V4(1,0,0,1));
+        
+        Shape_3D *shape1    = state->shapes_3d + 0;
+        Shape_3D *shape2    = state->shapes_3d + 1;
+        
+        draw(shape1, V4(1,1,1,1));
+        draw(shape2, V4(1,1,1,1));
+        
+
+        f32 axis_thickness = .1f;
+        s32 axis_length = 30;
+        draw_line(V3(.1f,  0,  0), v3(axis_length,0,0), axis_thickness, V4(1,0,0,1));
+        draw_line(V3(  0,.1f,  0), v3(0,axis_length,0), axis_thickness, V4(0,1,0,1));
+        draw_line(V3(  0,  0,.1f), v3(0,0,axis_length), axis_thickness, V4(0,0,1,1));
+        
+        //tick marks
+        for (s32 i = 5; i < axis_length; i += 5) {
+            f32 tick_size = axis_thickness*1.5f;
+            draw_cube(v3((f32)i,   .0f,   .0f), tick_size,tick_size,tick_size, V4(1,1,1,1));
+            draw_cube(v3(   .0f,(f32)i,   .0f), tick_size,tick_size,tick_size, V4(1,1,1,1));
+            draw_cube(v3(   .0f,  0.0f,(f32)i), tick_size,tick_size,tick_size, V4(1,1,1,1));
+        }
         
         
-        
-        
-        s32 num_axis_cubes = 20;
-        f32 axis_cube_size = 0.25f;
-        for (int i = 0; i < num_axis_cubes; i += 1) {
-            draw_cube(v3((f32)i+1, 0, 0), axis_cube_size, axis_cube_size, axis_cube_size, V4(1,0,0,1));
-            draw_cube(v3(0, (f32)i+1, 0), axis_cube_size, axis_cube_size, axis_cube_size, V4(0,1,0,1));
-            draw_cube(v3(0, 0, (f32)i+1), axis_cube_size, axis_cube_size, axis_cube_size, V4(0,0,1,1));
-        }    
     } break;
     }
 }
@@ -187,9 +238,53 @@ static void handle_input_gjk_2d(User_Input *input) {
 }
 
 static void handle_input_gjk_3d(User_Input *input) {
+    Game_State *state = get_game_state();
     Render_Context *rcx = &get_platform()->rcx;
+    
+    Vector3 cam_pos = rcx->cam_pos;
     f32 cam_move_speed = 0.1f;
     f32 cam_rot_speed = 0.003f;
+    
+    Shape_3D *shape1    = state->shapes_3d + 0;
+    Shape_3D *shape2    = state->shapes_3d + 1;
+    Shape_3D *sel_shape = state->shapes_3d + state->sel_shape;
+    
+    if (sel_shape) {
+        
+        draw_line_dir(sel_shape->pos, V3(1,0,0), 0.02f, V4(1,0,0,1));
+        draw_line_dir(sel_shape->pos, V3(0,1,0), 0.02f, V4(0,1,0,1));
+        draw_line_dir(sel_shape->pos, V3(0,0,1), 0.02f, V4(0,0,1,1));
+        
+        
+        Platform *platform = get_platform();
+        
+        Vector3 cam_x, cam_y, cam_z;
+        get_camera_local_axis(&cam_x, &cam_y, &cam_z);
+        Vector3 mouse_pos_on_near_plane = rcx->cam_pos + cam_z*rcx->near_plane;
+        
+        Vector2 mouse_pos_np_xy_t = platform->mouse_pos_normalized - v2(0.5f, 0.5f);
+        //Vector2 mouse_pos_np_xy_t = {};
+        //breakpoint;
+        
+        Vector2 np_dim = get_near_plane_dim(get_window_aspect_ratio());
+        mouse_pos_on_near_plane += cam_x*(mouse_pos_np_xy_t.x*np_dim.x);
+        mouse_pos_on_near_plane += cam_y*(mouse_pos_np_xy_t.y*np_dim.y);
+        
+        Vector3 to_mouse_3d = mouse_pos_on_near_plane - rcx->cam_pos;
+        //draw_line_dir(rcx->cam_pos, to_mouse_3d*5.0f, .01f, V4(0,1,1,1));
+        
+        draw_cube(rcx->cam_pos + to_mouse_3d*5.0f, .1f, .1f, .1f, V4(1,0,0,1));
+        
+        debug_printf("Cam p: (%.3f, %.3f, %.3f)\n", rcx->cam_pos.x, rcx->cam_pos.y, rcx->cam_pos.z);
+        debug_printf("Cam x: (%.3f, %.3f, %.3f)\n", cam_x.x, cam_x.y, cam_x.z);
+        debug_printf("Cam y: (%.3f, %.3f, %.3f)\n", cam_y.x, cam_y.y, cam_y.z);
+        debug_printf("Cam z: (%.3f, %.3f, %.3f)\n", cam_z.x, cam_z.y, cam_z.z);
+        debug_printf("Mouse on np: (%.3f, %.3f, %.3f)\n", mouse_pos_on_near_plane.x,
+                     mouse_pos_on_near_plane.y,mouse_pos_on_near_plane.z);
+        
+        
+        //draw_line();
+    }
     
     for_unhandled_input_event (input, INPUT_FOCUS_WINDOW) {
         if (event->type == INPUT_EVENT_KEY) {

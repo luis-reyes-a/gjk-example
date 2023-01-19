@@ -537,6 +537,11 @@ v3(f32 x, f32 y, f32 z) {
 }
 
 inline Vector3
+v3(s32 x, s32 y, s32 z) {	
+    return {(f32)x, (f32)y, (f32)z};	
+}
+
+inline Vector3
 v3(Vector2 v, f32 z) {	
     return {v.x, v.y, z};	
 }
