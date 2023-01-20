@@ -1986,6 +1986,35 @@ iterate_pixels_to_target(Vector2i init_pos, Vector2i target_pos)
     return it;
 }
 
+//returns the number of raycast hits we got against a sphere
+//NOTE this expects ray_dir to be normalized
+static s32
+get_raycast_hit_distances_to_sphere(Vector3 sphere_pos, f32 sphere_r, Vector3 ray_pos, Vector3 ray_dir,
+                                    f32 *out_dist_min, f32 *out_dist_max) {
+    Vector3 ray_pos_to_sphere_pos = sphere_pos - ray_pos;
+    f32 dist_to_sphere_center_along_ray = dot3(ray_dir, ray_pos_to_sphere_pos);
+    //if (dist_to_sphere_center_along_ray < 0) return 0;
+    Vector3 sphere_pos_proj_on_ray = ray_pos + ray_dir*dist_to_sphere_center_along_ray;
+    //if (normsq(sphere_pos - sphere_pos_proj_on_ray) > SQUARED(sphere_r)) return 0;
+    f32 perp_dist_to_sphere_center = norm(sphere_pos - sphere_pos_proj_on_ray);
+    
+    f32 r_squared_minus_y_squared = SQUARED(sphere_r) - SQUARED(perp_dist_to_sphere_center);
+    if (r_squared_minus_y_squared >= 0) {
+        f32 dist_delta = sqroot(r_squared_minus_y_squared); 
+        if (dist_delta < 0.001f) { //consider this one hit only
+            *out_dist_min = *out_dist_max = dist_to_sphere_center_along_ray;
+            return 1;
+        } else {
+            *out_dist_min = dist_to_sphere_center_along_ray - dist_delta;
+            *out_dist_max = dist_to_sphere_center_along_ray + dist_delta;
+            return 2;
+        }
+    } else { //ray never hits sphere
+        return 0;
+    }
+}
+
+
 
 //simd stuff 
 union Vector3_SIMD 

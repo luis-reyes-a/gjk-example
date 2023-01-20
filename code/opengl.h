@@ -223,6 +223,7 @@ enum UBO_Binding_Point {
 struct Vertex {
     Vector3 pos;
     Vector2 uv;
+    Vector3 normal; //must be last or initializer lists need to be rearranged
 };
 
 
@@ -232,9 +233,6 @@ struct Vertex_Mesh {
     s32 index_count;
     s32 vertex_count;
 };
-
-
-
 
 
 #define ATLAS_SPRITE_MAX_COUNT 128
@@ -573,22 +571,28 @@ struct Simple_Shader_3D {
     
     GLint vert_pos;
     GLint vert_uv;
+    GLint vert_normal;
     
-    GLint u_xform;
+    GLint u_view_projection;
+    GLint u_world;
     GLint u_color;
     GLint u_near; //optinal
     GLint u_far;  //optinal
+    GLint u_cam_view_dir;
     
     static constexpr char* common_src = ""
     "#version 330\n"
     "#line " STRINGIFY((__LINE__ + 1)) "\n"
-    "uniform mat4x4 u_xform;\n"
+    "uniform mat4x4 u_view_projection;\n"
+    "uniform mat4x4 u_world;\n"
     "uniform float u_near;\n"
     "uniform float u_far;\n"
     "uniform vec4  u_color;\n"
+    "uniform vec3  u_cam_view_dir;\n"
     "\n"
     "#define V2F_STRUCT struct {\\\n"
     "    vec2 uv;\\\n"
+    "    vec3 normal;\\\n" 
     "    vec4 color;\\\n"
     "}\n"
     "//COMMON_SRC END\n\n";
@@ -598,13 +602,16 @@ struct Simple_Shader_3D {
     R"___(
      in vec3 vert_pos; //local pos offset to the vertex, in normalized space
      in vec2 vert_uv;
+     in vec3 vert_normal;
          
      out V2F_STRUCT v2f;
-     void main () { 
-         gl_Position = u_xform*vec4(vert_pos, 1);
+     void main () {  
+         mat4 xform = u_view_projection*u_world;
+         gl_Position = xform*vec4(vert_pos, 1);
          //gl_Position = vec4(vert_pos, 1)*u_xform;
          v2f.uv = vert_uv;
-         v2f.color = u_color;
+         v2f.color = u_color; 
+         v2f.normal = normalize((u_world*vec4(vert_normal, 0)).xyz);
      }
      )___";
     
@@ -620,9 +627,12 @@ struct Simple_Shader_3D {
 
      out vec4 frag_color;
      void main () { 
-         //float tz = linearize_depth(gl_FragCoord.z);
          frag_color = v2f.color;
-         //frag_color.xyz *= tz;
+         float dot_along_view_dir = dot(u_cam_view_dir, -v2f.normal);
+         //float dot_along_view_dir = dot(vec3(0,0,-1), -v2f.normal);
+         float t = 0.5*(dot_along_view_dir + 1);
+         //frag_color.xyz *= 1 - (1 - t) * (1 - t); //easeOutQuad
+         frag_color.xyz *= t*t; //easeOutQuad
      }
     )___";
     
@@ -677,14 +687,19 @@ struct Simple_Shader_3D {
             vert_uv = glGetAttribLocation(pid, "vert_uv");
             //assert (vert_uv != -1); //didn't find it, probably optimized out if never used in shader 
             
-            u_xform = glGetUniformLocation(pid, "u_xform");
-            assert (u_xform != -1);
+            vert_normal = glGetAttribLocation(pid, "vert_normal");
+            
+            u_view_projection = glGetUniformLocation(pid, "u_view_projection");
+            assert (u_view_projection != -1);
+            u_world = glGetUniformLocation(pid, "u_world");
+            assert (u_world != -1);
             
             u_color = glGetUniformLocation(pid, "u_color");
             assert (u_color != -1);
             
             u_near = glGetUniformLocation(pid, "u_near"); //NOTE this are optinal, we don't care if equal =1
             u_far  = glGetUniformLocation(pid, "u_far");  //NOTE this are optinal, we don't care if equal =1
+            u_cam_view_dir = glGetUniformLocation(pid, "u_cam_view_dir"); //NOTE optinal
             
             //u_cam_pos = glGetUniformLocation(pid, "u_cam_pos");
             //assert (u_cam_pos != -1);
@@ -704,13 +719,21 @@ struct Simple_Shader_3D {
             glVertexAttribPointer(vert_uv, 2, GL_FLOAT, GL_FALSE, 
                                   sizeof(Vertex), (void *)offsetof(Vertex, uv));    
         }
+        
+        if (vert_normal != -1) {
+            glEnableVertexAttribArray(vert_normal);
+            
+            glVertexAttribPointer(vert_normal, 3, GL_FLOAT, GL_FALSE, 
+                                  sizeof(Vertex), (void *)offsetof(Vertex, normal)); 
+        }
         check_for_errors(); //NOTE ERROR:1282 may happen if GL_ARRAY_BUFFER not bound
     }
     
     void disable_vertex_attributes() {
         flush_errors();
         glDisableVertexAttribArray(vert_pos);
-        if (vert_uv != -1) glDisableVertexAttribArray(vert_uv);
+        if (vert_uv != -1)     glDisableVertexAttribArray(vert_uv);
+        if (vert_normal != -1) glDisableVertexAttribArray(vert_normal);
         check_for_errors();
     }
 };
@@ -963,34 +986,233 @@ set_multisample_count(s32 new_multisample_count)
     }
 }
 
+union Triangle_Face {
+        //NOTE you cannot add aything else here otherwise glBufferData will not get pure indices
+    struct {
+        s32 i0, i1, i2; //form counter-clockwise face    
+    };
+    s32 i[3];
+    
+};
+
+struct Scoped_Memory_Arena : Memory_Arena {
+    Scoped_Memory_Arena(u32 _size) {
+        memzero(this, sizeof *this);
+        data = (u8 *)win32_allocate(_size);
+        if (data) {
+            size = _size;
+            used = 0;
+        }
+    }
+    
+    ~Scoped_Memory_Arena() {
+        if (data) {
+            win32_release(data);
+        }
+    }
+};
+
+static Vertex_Mesh 
+load_obj(Array<Vertex> *vertex_array, Array<Triangle_Face> *face_array, String filepath) {
+    String ext = get_file_extension(filepath);
+    if (!strmatch(ext, ".obj"s)) {
+        logprintf("Cannot load %.*s as an .obj file...\n", filepath.length, filepath.str);
+        return {};
+    }
+    
+    Scoped_Memory_Arena temp(1024*1024*16);
+    char *file = win32_open_entire_file_null_terminate(&temp, filepath);
+    if (!file) {
+        logprintf("Couldn't load obj %.*s\n", filepath.length, filepath.str);
+        return {};
+    }
+    
+    
+    auto uvs     = make_array<Vector2>(&temp, 4096);
+    auto normals = make_array<Vector3>(&temp, 4096);
+    
+    char *at = file;
+    auto move_to_newline_or_eof = [&at]() {
+        while (*at && *at!='\n') {
+            at += 1;
+        }
+    };
+    
+    auto parse_next_number_in_line = [&at](f32 *result) -> boolint {
+        while (*at == ' ') at += 1;
+        if (*at == '-' || is_digit(*at)) { //we have a number
+            char *start = at;
+            s32 length = 1;
+            at += 1;
+            while (is_digit(*at) || *at == '.') {
+                length += 1;
+                at += 1;
+            }
+            *result = string_to_f32(start, length);
+            return true;
+        }
+        return false;
+    };
+    
+    auto parse_next_int_in_line = [&at](s32 *result) -> boolint {
+        while (*at == ' ') at += 1;
+        if (*at == '-' || is_digit(*at)) { //we have a number
+            char *start = at;
+            s32 length = 1;
+            at += 1;
+            while (is_digit(*at)) {
+                length += 1;
+                at += 1;
+            }
+            *result = string_to_s32(start, length);
+            return true;
+        }
+        return false;
+    };
+    
+    auto consume_char = [&at](char c) -> boolint {
+        if (*at == c) {
+            at += 1;
+            return true;
+        }
+        return false;
+    };
+    
+    Vertex_Mesh mesh = {};
+    mesh.first_index = 3*face_array->count;
+    s32 first_vertex_array_index = vertex_array->count;
+    
+    s32 init_face_array_count = face_array->count;
+    s32 init_vert_array_count = vertex_array->count;
+    move_to_newline_or_eof(); //first lines seem to just be comments, we always want to start at start of line for this loop
+    while (*at) {
+        assert (*at == '\n');
+        at += 1;
+        
+        if (at[0] == 'v' && at[1] == ' ') { //vertex pos
+            at += 2;
+            Vertex vertex = {};
+            if (parse_next_number_in_line(&vertex.pos.x) && parse_next_number_in_line(&vertex.pos.y) && parse_next_number_in_line(&vertex.pos.z)) {
+                vertex_array->add(&vertex);
+            } else {
+                assert (0);
+            }
+        } else if (at[0] == 'v' && at[1] == 'n' && at[2] == ' ') { //vertex normals
+            at += 3;
+            Vector3 normal;
+            if (parse_next_number_in_line(&normal.x) && parse_next_number_in_line(&normal.y) && parse_next_number_in_line(&normal.z)) {
+                normals.add(normal);
+            } else {
+                assert (0);
+            }
+        } else if (at[0] == 'v' && at[1] == 't' && at[2] == ' ') { //vertex uv's
+            at += 3;
+            Vector2 uv;
+            if (parse_next_number_in_line(&uv.x) && parse_next_number_in_line(&uv.y)) {
+                uvs.add(uv);
+            } else {
+                assert (0);
+            }
+            
+        } else if (at[0] == 'f' && at[1] == ' ') { //face indices
+            at += 2;
+            s32 parsed_index_group_count = 0;
+            s32 indices[3][3] = {}; //ok since .obj doesn't use 0-based indices
+            
+            if (parse_next_int_in_line(&indices[0][0]) && consume_char('/') && parse_next_int_in_line(&indices[0][1]) && consume_char('/') && parse_next_int_in_line(&indices[0][2])) {
+                parsed_index_group_count += 1;
+            }
+            
+            if (parse_next_int_in_line(&indices[1][0]) && consume_char('/') && parse_next_int_in_line(&indices[1][1]) && consume_char('/') && parse_next_int_in_line(&indices[1][2])) {
+                parsed_index_group_count += 1;
+            }
+            
+            if (parse_next_int_in_line(&indices[2][0]) && consume_char('/') && parse_next_int_in_line(&indices[2][1]) && consume_char('/') && parse_next_int_in_line(&indices[2][2])) {
+                parsed_index_group_count += 1;
+            }
+            
+            if (parsed_index_group_count == 3) {
+                Triangle_Face *face = face_array->add();
+                face->i0 = first_vertex_array_index + indices[0][0] - 1; 
+                face->i1 = first_vertex_array_index + indices[1][0] - 1;
+                face->i2 = first_vertex_array_index + indices[2][0] - 1;
+                
+                for (s32 i = 0; i < 3; i += 1) {
+                    Vertex *vert = *vertex_array + face->i[i];
+                    vert->uv     = uvs     [indices[i][1] - 1];
+                    vert->normal = normals [indices[i][2] - 1];
+                }
+            } else {
+                assert (0); //we failed
+            }
+        }
+        
+        move_to_newline_or_eof();
+    }
+    
+    
+    mesh.index_count  = 3*(face_array->count - init_face_array_count);
+    mesh.vertex_count = vertex_array->count - init_vert_array_count;
+    return mesh;
+}
+
 static void 
 load_simple_meshes_vbo_and_ebo() {
     Memory_Arena *temp = get_temp_memory();
     RESTORE_MEMORY_ARENA_ON_SCOPE_EXIT(temp);
     
-    Array<Vertex> vertex_array = make_array<Vertex>(temp, 512);
-    Array<u32> index_array = make_array<u32>(temp, 1024);
     
-    auto init_mesh = [&vertex_array, &index_array](Vertex_Mesh *mesh, Vertex *vertices, s32 vertex_count, u32 *indices, s32 index_count) {
-        mesh->first_index = index_array.count; 
-        mesh->index_count = index_count;
-        u32 *dst_i = index_array.add_array(index_count);
-        assert (dst_i);
+    
+    //Memory_Arena temp2 = push_memory_arena(temp, 1024*1024*3);
+    auto vertex_array  = make_array<Vertex>(temp, 512);
+    auto face_array    = make_array<Triangle_Face>(temp, 1024);
+    
+    auto init_mesh = [&vertex_array, &face_array](Vertex_Mesh *mesh, Vertex *vertices, s32 vertex_count, Triangle_Face *faces, s32 face_count) {
+        mesh->first_index = face_array.count*3;
+        mesh->index_count = face_count*3;
+        Triangle_Face *dst_faces = face_array.add_array(face_count);
+        assert (dst_faces);
         
         s32 first_vertex_offset = vertex_array.count;
-        for (int i = 0; i < index_count; i += 1) {
-            dst_i[i] = first_vertex_offset + indices[i];
+        for (int i = 0; i < face_count; i += 1) {
+            dst_faces[i].i0 = faces[i].i0 + first_vertex_offset;
+            dst_faces[i].i1 = faces[i].i1 + first_vertex_offset;
+            dst_faces[i].i2 = faces[i].i2 + first_vertex_offset;
         }
         
         mesh->vertex_count = vertex_count;
-        Vertex *dst_v = vertex_array.add_array(vertex_count);
-        assert (dst_v);
-        memcopy(dst_v, vertices, sizeof(vertices[0])*vertex_count);
+        Vertex *dst_vertices = vertex_array.add_array(vertex_count);
+        assert (dst_vertices);
+        memcopy(dst_vertices, vertices, sizeof(vertices[0])*vertex_count);
+        for (int i = 0; i < face_count; i += 1) {
+            Triangle_Face *face = faces + i;
+            Vertex *dst_v0 = dst_vertices + face->i0;
+            Vertex *dst_v1 = dst_vertices + face->i1;
+            Vertex *dst_v2 = dst_vertices + face->i2;
+            
+            Vector3 v10 = dst_v0->pos - dst_v1->pos;
+            Vector3 v12 = dst_v2->pos - dst_v1->pos;
+            Vector3 normal = cross(v12, v10);
+            
+            //assert (normsq(normal) > 0);
+            dst_v0->normal += normal;
+            dst_v1->normal += normal;
+            dst_v2->normal += normal;
+            
+            //assert (normsq( dst_v0->normal) > 0);
+            //assert (normsq( dst_v1->normal) > 0);
+            //assert (normsq( dst_v2->normal) > 0);
+        }
+        
+        //NOTE we have to normalize normals anyways when we project with world matrix
+        //for (int i = 0; i < vertex_count; i += 1) {
+            //normalize(&dst_vertices[i].normal);
+        //}
     };
     
-    for (int i = 0; i < MESH_COUNT; i += 1) {
-        Vertex_Mesh *mesh = OpenGL.meshes + i;
-        switch (i) {
+    for (int mesh_type = 0; mesh_type < MESH_COUNT; mesh_type += 1) {
+        Vertex_Mesh *mesh = OpenGL.meshes + mesh_type;
+        switch (mesh_type) {
         case MESH_TRIANGLE: {
             //f32 height = 0.86602540378f;
             f32 half_h = 0.43301270189f;
@@ -999,10 +1221,10 @@ load_simple_meshes_vbo_and_ebo() {
                 {{+0.5f, -half_h, 0.0f},  {1, 0}}, //1 front, top left
                 {{+0.0f, +half_h, 0.0f}, {0.5f, 1}}, //2 front, bot right   
             };
-            u32 indices[] = {
-                0, 1, 2,
+            Triangle_Face faces[] = {
+                {0, 1, 2},
             };
-            init_mesh(mesh, vertices, countof(vertices), indices, countof(indices));
+            init_mesh(mesh, vertices, countof(vertices), faces, countof(faces));
         } break;
         case MESH_QUAD: {
             Vertex vertices[] {
@@ -1011,11 +1233,11 @@ load_simple_meshes_vbo_and_ebo() {
                 {{+0.5f, -0.5f, 0.0f}, {1, 0}}, //2 front, bot right
                 {{+0.5f, +0.5f, 0.0f}, {1, 1}}, //3 front, top right    
             };
-            u32 indices[] = {
-                0, 2, 1,
-                1, 2, 3,
+            Triangle_Face faces[] = {
+                {0, 2, 1},
+                {1, 2, 3},
             };
-            init_mesh(mesh, vertices, countof(vertices), indices, countof(indices));
+            init_mesh(mesh, vertices, countof(vertices), faces, countof(faces));
         } break;
         case MESH_CUBE: {
             Vertex vertices[] = {
@@ -1030,26 +1252,156 @@ load_simple_meshes_vbo_and_ebo() {
                 {{+0.5f, +0.5f, -0.5f}, {1, 1}}, //7 back, top right
             };
             
-            u32 indices[] = { //can we use a smaller size here?
-                0, 2, 1, //front
-                1, 2, 3,
+            Triangle_Face faces[] = { //can we use a smaller size here?
+                {0, 2, 1}, //front
+                {1, 2, 3},
                 
-                1, 3, 5, //top
-                5, 3, 7,
+                {1, 3, 5}, //top
+                {5, 3, 7},
                 
-                6, 4, 7, //back
-                7, 4, 5,
+                {6, 4, 7}, //back
+                {7, 4, 5},
                 
-                4, 6, 0, //bottom
-                0, 6, 2,
+                {4, 6, 0}, //bottom
+                {0, 6, 2},
                 
-                2, 6, 3, //right
-                3, 6, 7,
+                {2, 6, 3}, //right
+                {3, 6, 7},
                 
-                4, 0, 5, //left
-                5, 0, 1,
+                {4, 0, 5}, //left
+                {5, 0, 1},
             };
-            init_mesh(mesh, vertices, countof(vertices), indices, countof(indices));
+            init_mesh(mesh, vertices, countof(vertices), faces, countof(faces));
+        } break;
+        
+        case MESH_ICOSPHERE0: {
+            f32 sqrt_5 = 2.2360679775f;
+            f32 t = (1.0f + sqrt_5) / 2.0f;
+            f32 s = 0.4f;
+            
+            Vertex init_vertices[] = {
+                {-1*s,  t*s,  0},
+                { 1*s,  t*s,  0},
+                {-1*s, -t*s,  0},
+                { 1*s, -t*s,  0}, 
+                
+                { 0, -1*s,  t*s},
+                { 0,  1*s,  t*s},
+                { 0, -1*s, -t*s},
+                { 0,  1*s, -t*s},
+                
+                { t*s,  0, -1*s},
+                { t*s,  0,  1*s},
+                {-t*s,  0, -1*s},
+                {-t*s,  0,  1*s},
+            };
+            
+            
+            Triangle_Face init_faces[] = {
+                // 5 faces around point 0
+                {0, 11, 5},
+                {0, 5, 1},
+                {0, 1, 7},
+                {0, 7, 10},
+                {0, 10, 11},
+                
+                // 5 adjacent faces
+                {1, 5, 9},
+                {5, 11, 4},
+                {11, 10, 2},
+                {10, 7, 6},
+                {7, 1, 8},
+                
+                // 5 faces around point 3
+                {3, 9, 4},
+                {3, 4, 2},
+                {3, 2, 6},
+                {3, 6, 8},
+                {3, 8, 9},
+                
+                // 5 adjacent faces
+                {4, 9, 5},
+                {2, 4, 11},
+                {6, 2, 10},
+                {8, 6, 7},
+                {9, 8, 1},    
+            };
+            
+            init_mesh(mesh, init_vertices, countof(init_vertices), init_faces, countof(init_faces));
+            #if 0
+            if (mesh_type == MESH_ICOSPHERE0) {
+                init_mesh(mesh, init_vertices, countof(init_vertices), init_faces, countof(init_faces));    
+            }
+            //NOTE I get how this works but I don't like how we need a hash table
+            //maybe there's a smarter way to do this, but for now i say screw it and just load obj files
+            else {
+                mesh->first_index  = face_array.count*3;
+                mesh->index_count  = countof(init_faces)*4*3;
+                mesh->vertex_count = countof(init_faces)*6;
+                #if 1
+                s32 running_index_index = mesh->first_index;
+                for (s32 prev_face_index = 0; prev_face_index < countof(faces); prev_face_index += 1) {
+                    Triangle_Face *prev_face = faces + init_prev_face_index
+                    
+                    Vertex v0 = vertices[prev_face->i0];
+                    Vertex v3 = vertices[prev_face->i1];
+                    Vertex v5 = vertices[prev_face->i2];
+                    
+                    //             5                    
+                    //            / \
+                    //           /   \
+                    //          /     \
+                    //         /       \
+                    //        /         \
+                    //       2__________ 4
+                    //      /\           /\
+                    //     /  \         /  \
+                    //    /    \       /    \
+                    //   /      \     /      \
+                    //  /        \   /        \
+                    // 0__________\1/__________3
+                    
+                    auto make_vertex_between = [](Vertex a, Vertex b) -> Vertex {
+                        Vertex v = {};
+                        v.pos = a.pos + 0.5f*(b.pos-a.pos);
+                        v.uv  = a.uv  + 0.5f*(b.uv-a.uv); //probably not correct
+                        v.pos = normalize(v.pos)
+                        return v;
+                    };
+                    
+                    Vertex v2 = make_vertex_between(v0, v5);
+                    Vertex v1 = make_vertex_between(v0, v3);
+                    Vertex v4 = make_vertex_between(v3, v5);
+                    
+                    s32 start = face_array.count*3;
+                    
+                    vertex_array.add(v0);
+                    vertex_array.add(v1);
+                    vertex_array.add(v2); 
+                    face_array.add({start+0, start+1, start+2});
+                    
+                    vertex_array.add(v2);
+                    vertex_array.add(v1);
+                    vertex_array.add(v4); 
+                    face_array.add({start+2, start+1, start+4});
+                    
+                    vertex_array.add(v4);
+                    vertex_array.add(v1);
+                    vertex_array.add(v3); 
+                    face_array.add({start+4, start+1, start+3});
+                    
+                    vertex_array.add(v2);
+                    vertex_array.add(v4);
+                    vertex_array.add(v5); 
+                    face_array.add({start+2, start+4, start+5}); 
+                }  
+                #endif
+            }
+            #endif
+        } break;
+        
+        case MESH_ICOSPHERE1: {
+            *mesh = load_obj(&vertex_array, &face_array, "../meshes/icosphere.obj"s);
         } break;
         }
     }
@@ -1063,11 +1415,11 @@ load_simple_meshes_vbo_and_ebo() {
     glBufferData(GL_ARRAY_BUFFER, vertices_size, vertex_array.e, GL_STATIC_DRAW); 
     
     glBindBuffer(GL_ELEMENT_ARRAY_BUFFER, OpenGL.mesh_ebo);
-    s32 indices_size = sizeof(u32)*index_array.count;
-    glBufferData(GL_ELEMENT_ARRAY_BUFFER, indices_size, index_array.e, GL_STATIC_DRAW); 
+    s32 faces_size = sizeof(Triangle_Face)*face_array.count;
+    glBufferData(GL_ELEMENT_ARRAY_BUFFER, faces_size, face_array.e, GL_STATIC_DRAW); 
     
     debug_printf("Mesh vbo is %d bytes (%d vertices)\n", vertices_size, vertex_array.count);
-    debug_printf("Mesh ebo is %d bytes (%d indices)\n",  indices_size,  index_array.count);
+    debug_printf("Mesh ebo is %d bytes (%d indices)\n",  faces_size,  face_array.count*3);
 }
 
 internal void
@@ -1355,6 +1707,7 @@ draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
     proj.e43 = -1; //NOTE this puts z in w of vertex for perspective divide
     
     Matrix4x4 world_to_project = multiply(&proj, &lookat);
+    glUniformMatrix4fv(shader->u_view_projection, 1, GL_FALSE, world_to_project.e);
     
     if (shader->u_near != -1) {
         glUniform1f(shader->u_near, np);
@@ -1362,10 +1715,14 @@ draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
     if (shader->u_far != -1) {
         glUniform1f(shader->u_far, fp);
     }
+    if (shader->u_cam_view_dir != -1) {
+        glUniform3f(shader->u_cam_view_dir, -cam_z.x, -cam_z.y, -cam_z.z);
+    }
     
     for (int i = 0; i < rcx->model_count; i += 1) {
         Model *model = rcx->models + i;    
         Vertex_Mesh *mesh = OpenGL.meshes + model->mesh_type;
+        //Vertex_Mesh *mesh = OpenGL.meshes + MESH_ICOSPHERE;
         assert (mesh->vertex_count > 0);
         
         Matrix4x4 xform = identity4x4();
@@ -1378,8 +1735,7 @@ draw_3d_cubes(Render_Context *rcx, Vector2i viewport_dim) {
         xform.e24 = model->pos.y;
         xform.e34 = model->pos.z;
         
-        Matrix4x4 m = multiply(&world_to_project, &xform);
-        glUniformMatrix4fv(shader->u_xform, 1, GL_FALSE, m.e);
+        glUniformMatrix4fv(shader->u_world, 1, GL_FALSE, xform.e);
         
         Vector4 color = unpack_v4(model->color);
         glUniform4f(shader->u_color, color.r, color.g, color.b, color.a); 

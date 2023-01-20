@@ -92,6 +92,8 @@ enum Vertex_Mesh_Type : u32 {
     MESH_TRIANGLE,
     MESH_QUAD,
     MESH_CUBE,
+    MESH_ICOSPHERE0,
+    MESH_ICOSPHERE1,
     MESH_COUNT,
 };
 
@@ -237,6 +239,17 @@ make_unit_model(Vertex_Mesh_Type mesh, Vector3 pos) {
     model->basis.z = V3(0, 0, 1);
     model->color = {0xff, 0xff, 0xff, 0xff};
     return model;
+}
+
+static void
+draw_mesh(Vertex_Mesh_Type mesh, Vector3 pos, f32 w, f32 h, f32 d, Vector4 color = V4(1,1,1,1)) {
+    Model *model = make_unit_model(mesh, pos);
+    if (model) {
+        model->basis.x *= w;
+        model->basis.y *= h;
+        model->basis.z *= d;    
+        model->color = pack_color(color);
+    }
 }
 
 static void

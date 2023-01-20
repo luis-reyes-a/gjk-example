@@ -169,10 +169,13 @@ void update_game(Platform *platform) {
         }    
     } break;
     case GAME_GJK_3D: {
-        //static f32 angle_t = 0;
+        static f32 angle_t = 0;
         //Quaternion rot = quaternion_axis_angle_t(V3(1,0,0), angle_t);
-        //angle_t += 0.004f;
-        //draw_cube(V3(0,0,0), .5f, .5f, .5f, rot, V4(1,1,0,1));
+        Quaternion rot = {0,0,0,1};
+        angle_t += 0.004f;
+        draw_cube(V3(-2,3,-2), .5f, .5f, .5f, rot, V4(1,1,0,1));
+        draw_cube(V3(-4,4,-2), .5f, .5f, .5f, rot, V4(1,1,0,1));
+        draw_mesh(MESH_ICOSPHERE1, V3(-4,4,-1), .5f, .5f, .5f, V4(1,1,0,1));
         
         
         //draw_line(V3(1,0,1), V3(3,0,1), 0.01f, V4(1,0,0,1));
@@ -237,6 +240,22 @@ static void handle_input_gjk_2d(User_Input *input) {
     }
 }
 
+static boolint
+get_raycast_hit_length(Shape_3D *shape, Vector3 ray_pos, Vector3 ray_dir, f32 *out_dist) {
+    switch (shape->type) {
+    case SHAPE_SPHERE: {
+        //Vector3 to_sphere = shape->pos - ray_pos;
+    } break;
+    case SHAPE_AABB_3D: {
+        
+    } break;
+    case SHAPE_CUBE: {
+        
+    } break;
+    }
+    return false;
+}
+
 static void handle_input_gjk_3d(User_Input *input) {
     Game_State *state = get_game_state();
     Render_Context *rcx = &get_platform()->rcx;
@@ -245,47 +264,7 @@ static void handle_input_gjk_3d(User_Input *input) {
     f32 cam_move_speed = 0.1f;
     f32 cam_rot_speed = 0.003f;
     
-    Shape_3D *shape1    = state->shapes_3d + 0;
-    Shape_3D *shape2    = state->shapes_3d + 1;
-    Shape_3D *sel_shape = state->shapes_3d + state->sel_shape;
-    
-    if (sel_shape) {
-        
-        draw_line_dir(sel_shape->pos, V3(1,0,0), 0.02f, V4(1,0,0,1));
-        draw_line_dir(sel_shape->pos, V3(0,1,0), 0.02f, V4(0,1,0,1));
-        draw_line_dir(sel_shape->pos, V3(0,0,1), 0.02f, V4(0,0,1,1));
-        
-        
-        Platform *platform = get_platform();
-        
-        Vector3 cam_x, cam_y, cam_z;
-        get_camera_local_axis(&cam_x, &cam_y, &cam_z);
-        Vector3 mouse_pos_on_near_plane = rcx->cam_pos + cam_z*rcx->near_plane;
-        
-        Vector2 mouse_pos_np_xy_t = platform->mouse_pos_normalized - v2(0.5f, 0.5f);
-        //Vector2 mouse_pos_np_xy_t = {};
-        //breakpoint;
-        
-        Vector2 np_dim = get_near_plane_dim(get_window_aspect_ratio());
-        mouse_pos_on_near_plane += cam_x*(mouse_pos_np_xy_t.x*np_dim.x);
-        mouse_pos_on_near_plane += cam_y*(mouse_pos_np_xy_t.y*np_dim.y);
-        
-        Vector3 to_mouse_3d = mouse_pos_on_near_plane - rcx->cam_pos;
-        //draw_line_dir(rcx->cam_pos, to_mouse_3d*5.0f, .01f, V4(0,1,1,1));
-        
-        draw_cube(rcx->cam_pos + to_mouse_3d*5.0f, .1f, .1f, .1f, V4(1,0,0,1));
-        
-        debug_printf("Cam p: (%.3f, %.3f, %.3f)\n", rcx->cam_pos.x, rcx->cam_pos.y, rcx->cam_pos.z);
-        debug_printf("Cam x: (%.3f, %.3f, %.3f)\n", cam_x.x, cam_x.y, cam_x.z);
-        debug_printf("Cam y: (%.3f, %.3f, %.3f)\n", cam_y.x, cam_y.y, cam_y.z);
-        debug_printf("Cam z: (%.3f, %.3f, %.3f)\n", cam_z.x, cam_z.y, cam_z.z);
-        debug_printf("Mouse on np: (%.3f, %.3f, %.3f)\n", mouse_pos_on_near_plane.x,
-                     mouse_pos_on_near_plane.y,mouse_pos_on_near_plane.z);
-        
-        
-        //draw_line();
-    }
-    
+    //we have to handle camera movement/orientation first
     for_unhandled_input_event (input, INPUT_FOCUS_WINDOW) {
         if (event->type == INPUT_EVENT_KEY) {
             Input_Event_Key *key = (Input_Event_Key *)event;
@@ -342,6 +321,72 @@ static void handle_input_gjk_3d(User_Input *input) {
             
             }
         } 
+    }
+    
+    Platform *platform = get_platform();
+    
+    Vector3 cam_x, cam_y, cam_z;
+    get_camera_local_axis(&cam_x, &cam_y, &cam_z);
+    Vector3 mouse_pos_on_near_plane = rcx->cam_pos + cam_z*rcx->near_plane;
+    
+    {
+        Vector2 mouse_pos_np_xy_t = platform->mouse_pos_normalized - v2(0.5f, 0.5f);
+        
+        Vector2 np_dim = get_near_plane_dim(get_window_aspect_ratio());
+        mouse_pos_on_near_plane += cam_x*(mouse_pos_np_xy_t.x*np_dim.x);
+        mouse_pos_on_near_plane += cam_y*(mouse_pos_np_xy_t.y*np_dim.y);    
+    }
+    Vector3 to_mouse_3d = mouse_pos_on_near_plane - rcx->cam_pos;
+    //draw_line_dir(rcx->cam_pos, to_mouse_3d*5.0f, .01f, V4(0,1,1,1));
+    
+    Shape_3D *shape1    = state->shapes_3d + 0;
+    Shape_3D *shape2    = state->shapes_3d + 1;
+    
+    
+    Shape_3D *hover_shape = null;
+    {
+        f32 best_dist = F32_MAX;
+        f32 dist;
+        if (get_raycast_hit_length(shape1, rcx->cam_pos, to_mouse_3d, &dist)) {
+            best_dist = dist;
+            hover_shape = shape1;
+        }
+        
+        if (get_raycast_hit_length(shape2, rcx->cam_pos, to_mouse_3d, &dist)) {
+            if (dist < best_dist) {
+                best_dist = dist;
+                hover_shape = shape2;
+            }
+        }
+    }
+    
+    
+    
+    Shape_3D *sel_shape = state->shapes_3d + state->sel_shape;
+    
+    if (sel_shape) {
+        draw_line_dir(sel_shape->pos, V3(1,0,0), 0.02f, V4(1,0,0,1));
+        draw_line_dir(sel_shape->pos, V3(0,1,0), 0.02f, V4(0,1,0,1));
+        draw_line_dir(sel_shape->pos, V3(0,0,1), 0.02f, V4(0,0,1,1));
+        
+        
+        
+        
+        //draw_cube(rcx->cam_pos + to_mouse_3d*5.0f, .1f, .1f, .1f, V4(1,0,0,1));
+        
+        debug_printf("Cam p: (%.3f, %.3f, %.3f)\n", rcx->cam_pos.x, rcx->cam_pos.y, rcx->cam_pos.z);
+        debug_printf("Cam x: (%.3f, %.3f, %.3f)\n", cam_x.x, cam_x.y, cam_x.z);
+        debug_printf("Cam y: (%.3f, %.3f, %.3f)\n", cam_y.x, cam_y.y, cam_y.z);
+        debug_printf("Cam z: (%.3f, %.3f, %.3f)\n", cam_z.x, cam_z.y, cam_z.z);
+        debug_printf("Mouse on np: (%.3f, %.3f, %.3f)\n", mouse_pos_on_near_plane.x,
+                     mouse_pos_on_near_plane.y,mouse_pos_on_near_plane.z);
+        
+        
+        //draw_line();
+    }
+    
+    for_unhandled_input_event (input, INPUT_FOCUS_WINDOW) {
+        
     }
 }
 

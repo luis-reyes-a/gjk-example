@@ -774,8 +774,7 @@ copy_string_to_clipboard(Win32 *win32, char *string, s32 length)
 
 
 internal void *
-win32_allocate(uintptr size)
-{
+win32_allocate(uintptr size) {
     //MEM_RESERVE just reserves a region of VIRTUAL memory
     //MEM_COMMIT actually maps physical pages to that region, returns zeroed pages
     //MEM_RESET AND MEM_RESET_UNDO do NOT zero out memory again, they serve to LOCK
@@ -819,8 +818,7 @@ win32_heap_free(Platform_Heap heap, void *memory)
 }
 
 internal void
-win32_release(void *memory)
-{
+win32_release(void *memory) {
     BOOL worked = VirtualFree(memory, 0, MEM_RELEASE);
     assert (worked);
 }
